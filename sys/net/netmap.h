@@ -166,7 +166,14 @@ struct netmap_slot {
 	uint32_t buf_idx;	/* buffer index */
 	uint16_t len;		/* length for this slot */
 	uint16_t flags;		/* buf changed, etc. */
-	uint64_t ptr;		/* pointer for indirect buffers */
+	union {
+		uint64_t ptr;		/* pointer for indirect buffers */
+		struct {
+			int32_t fd;
+			uint16_t offset;
+			uint16_t next;
+		};
+	};
 };
 
 /*
@@ -220,6 +227,8 @@ struct netmap_slot {
 	 * The 'len' field refers to the individual fragment.
 	 */
 
+#define NS_STUCK	0x0040	/* the slot throttles the ring */
+#define NS_RELEASED	0x0080	/* stuck has been released */
 #define	NS_PORT_SHIFT	8
 #define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)
 	/*
@@ -488,6 +497,7 @@ struct netmap_if {
  */
 
 
+#define	NETMAP_SUFFIX_LEN	64
 /*
  * struct nmreq overlays a struct ifreq (just the name)
  */
@@ -535,6 +545,7 @@ struct nmreq {
 	uint32_t	nr_flags;
 	/* various modes, extends nr_ringid */
 	uint32_t	spare2[1];
+	char		nr_suffix[NETMAP_SUFFIX_LEN];
 };
 
 #define NR_REG_MASK		0xf /* values for nr_flags */
@@ -563,8 +574,10 @@ enum {	NR_REG_DEFAULT	= 0,	/* backward compat, should not be used. */
  * to use those headers. If the flag is set, the application can use the
  * NETMAP_VNET_HDR_GET command to figure out the header length. */
 #define NR_ACCEPT_VNET_HDR	0x8000
+#define NR_SUFFIX		0x10000
 
 #define	NM_BDG_NAME		"vale"	/* prefix for bridge port name */
+#define	NM_STACK_NAME		"stack"	/* prefix for stack port name */
 
 #ifdef _WIN32
 /*
@@ -646,4 +659,9 @@ struct nm_ifreq {
 	char data[NM_IFRDATA_LEN];
 };
 
+/* msghdr-like structure in a flat location */
+struct nm_msghdr {
+	char nmsg_name[28]; // accommodate sockaddr_in6
+	uint32_t nmsg_namelen;
+};
 #endif /* _NET_NETMAP_H_ */

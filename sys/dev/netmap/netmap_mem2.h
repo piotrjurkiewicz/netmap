@@ -147,6 +147,7 @@ void	   netmap_mem_delete(struct netmap_mem_d *);
 struct netmap_mem_d* __netmap_mem_get(struct netmap_mem_d *, const char *, int);
 void __netmap_mem_put(struct netmap_mem_d *, const char *, int);
 struct netmap_mem_d* netmap_mem_find(nm_memid_t);
+int netmap_mem_set_buf_offset(struct netmap_mem_d *, u_int);
 
 #ifdef WITH_EXTMEM
 struct netmap_mem_d* netmap_mem_ext_create(struct nmreq *, int *);
@@ -170,6 +171,7 @@ int netmap_mem_pools_info_get(struct nmreq *, struct netmap_mem_d *);
 #define NETMAP_MEM_IO		0x4	/* the underlying memory is mmapped I/O */
 #define NETMAP_MEM_EXT		0x10	/* external memory (not remappable) */
 
-uint32_t netmap_extra_alloc(struct netmap_adapter *, uint32_t *, uint32_t n);
+uint32_t netmap_extra_alloc(struct netmap_adapter *, uint32_t *, uint32_t n, int ext);
+void netmap_extra_free(struct netmap_adapter *, uint32_t *, int);
 
 #endif

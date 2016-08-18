@@ -156,6 +156,10 @@ struct netmap_mem_d {
 	u_int flags;
 #define NETMAP_MEM_FINALIZED	0x1	/* preallocation done */
 #define NETMAP_MEM_HIDDEN	0x8	/* beeing prepared */
+	/* offset on DMA mapping */
+#define NETMAP_MEM_OFF_MAX	0xff
+#define NETMAP_MEM_OFF_SHIFT	24
+#define NETMAP_MEM_OFF_MASK	(NETMAP_MEM_OFF_MAX<<NETMAP_MEM_OFF_SHIFT)
 	int lasterr;		/* last error for curr config */
 	int active;		/* active users */
 	int refcount;
@@ -980,7 +984,7 @@ netmap_obj_free_va(struct netmap_obj_pool *p, void *vaddr)
  * returns the actual number.
  */
 uint32_t
-netmap_extra_alloc(struct netmap_adapter *na, uint32_t *head, uint32_t n)
+netmap_extra_alloc(struct netmap_adapter *na, uint32_t *head, uint32_t n, int ext)
 {
 	struct netmap_mem_d *nmd = na->nm_mem;
 	uint32_t i, pos = 0; /* opaque, scan position in the bitmap */
@@ -997,7 +1001,10 @@ netmap_extra_alloc(struct netmap_adapter *na, uint32_t *head, uint32_t n)
 			break;
 		}
 		ND(5, "allocate buffer %d -> %d", *head, cur);
-		*p = cur; /* link to previous head */
+		if (ext)
+			*++head = 0;
+		else
+			*p = cur; /* link to previous head */
 	}
 
 	NMA_UNLOCK(nmd);
@@ -1005,20 +1012,25 @@ netmap_extra_alloc(struct netmap_adapter *na, uint32_t *head, uint32_t n)
 	return i;
 }
 
-static void
-netmap_extra_free(struct netmap_adapter *na, uint32_t head)
+void
+netmap_extra_free(struct netmap_adapter *na, uint32_t *headp, int ext)
 {
         struct lut_entry *lut = na->na_lut.lut;
 	struct netmap_mem_d *nmd = na->nm_mem;
 	struct netmap_obj_pool *p = &nmd->pools[NETMAP_BUF_POOL];
 	uint32_t i, cur, *buf;
+	uint32_t head = *headp;
 
-	ND("freeing the extra list");
 	for (i = 0; head >=2 && head < p->objtotal; i++) {
 		cur = head;
-		buf = lut[head].vaddr;
-		head = *buf;
-		*buf = 0;
+		if (ext) {
+			*headp++ = 0;
+			head = *headp;
+		} else {
+			buf = lut[head].vaddr;
+			head = *buf;
+			*buf = 0;
+		}
 		if (netmap_obj_free(p, cur))
 			break;
 	}
@@ -1027,7 +1039,6 @@ netmap_extra_free(struct netmap_adapter *na, uint32_t head)
 	if (netmap_verbose)
 		D("freed %d buffers", i);
 }
-
 
 /* Return nonzero on error */
 static int
@@ -1374,6 +1385,20 @@ netmap_mem_reset_all(struct netmap_mem_d *nmd)
 	nmd->flags  &= ~NETMAP_MEM_FINALIZED;
 }
 
+int
+netmap_mem_set_buf_offset(struct netmap_mem_d *nmd, u_int len)
+{
+	if (len > NETMAP_MEM_OFF_MAX)
+		return EINVAL;
+	nmd->flags |= (len << NETMAP_MEM_OFF_SHIFT);
+	return 0;
+}
+
+static inline u_int netmap_mem_pdev_offset(struct netmap_mem_d *nmd)
+{
+	return (nmd->flags & NETMAP_MEM_OFF_MASK) >> NETMAP_MEM_OFF_SHIFT;
+}
+
 static int
 netmap_mem_unmap(struct netmap_obj_pool *p, struct netmap_adapter *na)
 {
@@ -1409,6 +1434,7 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 	D("unsupported on Windows");
 #else /* linux */
 	int i, lim = p->_objtotal;
+	u_int o;
 
 	if (na->pdev == NULL)
 		return 0;
@@ -1416,6 +1442,17 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 	for (i = 2; i < lim; i++) {
 		netmap_load_map(na, (bus_dma_tag_t) na->pdev, &p->lut[i].paddr,
 				p->lut[i].vaddr);
+	}
+	/* XXX: below is for Stackmap and ugly workaround to remap DMA.
+	 * Note that this is because netmap_load_map() is void as it is
+	 * needed only for special case (e.g., IOMMU or Xen) */
+	o = netmap_mem_pdev_offset(na->nm_mem);
+	if (o) {
+		for (i = 2; i < lim; i++) {
+			netmap_reload_map(na,
+				(bus_dma_tag_t) na->pdev,&p->lut[i].paddr,
+				(uint8_t *)p->lut[i].vaddr + o);
+		}
 	}
 #endif /* linux */
 
@@ -1682,8 +1719,9 @@ netmap_free_rings(struct netmap_adapter *na)
 						kring->name, ring, kring->users);
 				continue;
 			}
-			if (i != nma_get_nrings(na, t) || na->na_flags & NAF_HOST_RINGS)
+			if (i != nma_get_nrings(na, t) || na->na_flags & NAF_HOST_RINGS) {
 				netmap_free_bufs(na->nm_mem, ring->slot, kring->nkr_num_slots);
+			}
 			netmap_ring_free(na->nm_mem, ring);
 			kring->ring = NULL;
 		}
@@ -1867,7 +1905,7 @@ netmap_mem2_if_delete(struct netmap_adapter *na, struct netmap_if *nifp)
 		return;
 	NMA_LOCK(na->nm_mem);
 	if (nifp->ni_bufs_head)
-		netmap_extra_free(na, nifp->ni_bufs_head);
+		netmap_extra_free(na, &nifp->ni_bufs_head, 0);
 	netmap_if_free(na->nm_mem, nifp);
 
 	NMA_UNLOCK(na->nm_mem);

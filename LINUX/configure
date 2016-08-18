@@ -91,7 +91,7 @@ setop()
 
 # available subsystems
 subsystem_avail="vale pipe monitor generic ptnetmap-guest ptnetmap-host sink \
-	extmem"
+	extmem stack"
 #enabled subsystems (bitfield)
 subsystem=0
 
@@ -104,6 +104,7 @@ subsys enable vale
 subsys enable pipe
 subsys enable monitor
 subsys enable generic
+# subsys enable stack
 
 # available drivers
 driver_avail="r8169.c virtio_net.c forcedeth.c veth.c \
@@ -302,6 +303,8 @@ Available options:
   --disable-sink   	       disable the netmap sink device
   --enable-extmem   	       enable the external memory allocators
   --disable-extmem   	       disable the external memory allocators
+  --enable-stack	       enable stackmap
+  --disable-stack	       disable stackmap
   --cache=		       dir for reusing/caching of netmap_linux_config.h
 
   --cc=                        C compiler to be used for the apps [$cc]

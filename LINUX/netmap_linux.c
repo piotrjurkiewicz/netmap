@@ -795,6 +795,356 @@ nm_os_generic_set_features(struct netmap_generic_adapter *gna)
 }
 #endif /* WITH_GENERIC */
 
+#ifdef WITH_STACK
+void
+nm_os_stackmap_restore_data_ready(NM_SOCK_T *sk,
+				  struct stackmap_sk_adapter *ska)
+{
+	sk->sk_data_ready = ska->save_sk_data_ready;
+}
+
+void
+nm_os_stackmap_data_ready(NM_SOCK_T *sk)
+{
+	struct sk_buff_head *queue = &sk->sk_receive_queue;
+	struct sk_buff *m, *tmp;
+	unsigned long cpu_flags;
+	u_int count = 0;
+
+	/* XXX we should batch this lock outside the function */
+	spin_lock_irqsave(&queue->lock, cpu_flags);
+	skb_queue_walk_safe(queue, m, tmp) {
+		struct stackmap_cb *scb = STACKMAP_CB(m);
+
+		/* append this buffer to the scratchpad */
+		__builtin_prefetch(m->head);
+		scb->slot->fd = stackmap_sk(m->sk)->fd;
+		scb->slot->len = skb_headlen(m);
+		KASSERT(m->data - m->head <= 255, "too high offset");
+		scb->slot->offset = (uint8_t)(m->data - m->head);
+		stackmap_add_fdtable(scb, m->head);
+		sk_eat_skb(sk, m);
+		count++;
+	}
+	if (count > 1)
+		D("eaten %u packets", count);
+	spin_unlock_irqrestore(&queue->lock, cpu_flags);
+	//ska->save_sk_data_ready(sk);
+}
+
+NM_SOCK_T *
+nm_os_sock_fget(int fd)
+{
+	int err;
+	struct socket *sock = sockfd_lookup(fd, &err);
+
+	if (!sock)
+		return NULL;
+	return sock->sk;
+}
+
+void
+nm_os_sock_fput(NM_SOCK_T *sk)
+{
+	sockfd_put(sk->sk_socket);
+}
+
+/* This method + kfree_skb() drops packet rates from 14.5 to 9.5 Mpps
+ * at 2.8 Ghz CPU, and netif_receive_skb() to drop packet does so to
+ * 6 Mpps.
+ * Since we always allocate the same head size of skb, we
+ * could batch allocation.
+ * Anyways alloc/dealloc overhead of 200 ns is not that bad.
+ */
+struct mbuf *
+nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
+{
+	struct mbuf *m;
+	struct page *page;
+
+	m = build_skb(buf, NETMAP_BUF_SIZE(na));
+	if (!m)
+		return NULL;
+	page = virt_to_page(buf);
+	get_page(page); /* survive __kfree_skb */
+	ND("skb %p data %p page %p ref %d", m, buf, page, page_ref_count(page));
+	m->dev = na->ifp;
+	//if (na == stackmap_master(na))
+	skb_reserve(m, STACKMAP_DMA_OFFSET);
+	skb_put(m, len); // advance m->tail and increment m->len
+	return m;
+}
+
+/* Based on the TX path from __sys_sendmsg(), sock_sendmsg_nosec() to
+ * udp_sendpage()/udp_sendmsg(). Msghdr is placed right after user data.
+ *
+ * We first form a socket send buffer, so we can call
+ * udp_push_pending_frames() which dequeues skbs, builds IP header
+ * (ip_finish_skb()) then calls udp_send_skb() that finally builds
+ * UDP header.
+ */
+	/* raw    | headroom | user data | msghdr |    tailroom    | 
+	 * slot  buf        off         len
+	 * skb   head       data        tail         end      shinfo
+	 */
+static int
+stackmap_udp_sendmsg(struct mbuf *m)
+{
+	NM_SOCK_T *sk = m->sk;
+	struct nm_msghdr *nmsg;
+
+	struct inet_sock *inet = inet_sk(sk);
+	struct udp_sock *up = udp_sk(sk);
+	struct flowi4 fl4_stack;
+	struct flowi4 *fl4;
+	size_t ulen = m->len;
+	struct ipcm_cookie ipc;
+	struct rtable *rt = NULL;
+	__be32 daddr, faddr, saddr;
+	__be16 dport;
+	u8  tos;
+	int err;
+	struct ip_options_data opt_copy;
+	struct inet_cork *cork = &inet_sk(sk)->cork.base;
+	int hlen, missmatch;
+
+	hlen = STACKMAP_DMA_OFFSET + ETH_HDR_LEN +
+	    sizeof(struct iphdr) + sizeof(struct udphdr);
+
+	KASSERT(cork->opt == NULL, "cork->opt is non NULL");
+	/* we expect the user embedded msg after data */
+	if (skb_end_pointer(m) - skb_tail_pointer(m) < sizeof(*nmsg))
+		return EINVAL;
+	nmsg = (struct nm_msghdr *)(skb_tail_pointer(m));
+
+	ipc.opt = NULL;
+	ipc.tx_flags = 0;
+	ipc.ttl = 0;
+	ipc.tos = -1;
+
+	KASSERT(inet != NULL, "no inet");
+
+	fl4 = &inet->cork.fl.u.ip4;
+
+	/* no pending data case so far, but maybe needed */
+
+	ulen += sizeof(struct udphdr);
+
+	if (nmsg->nmsg_namelen) {
+		struct sockaddr_in *sin =
+			(struct sockaddr_in *)nmsg->nmsg_name;
+		if (sin->sin_family != AF_INET) {
+			return -EAFNOSUPPORT;
+		}
+		daddr = sin->sin_addr.s_addr;
+		dport = sin->sin_port;
+		if (dport == 0) {
+			return -EINVAL;
+		}
+	} else { /* no connected socket support so far */
+		return EINVAL;
+	}
+	ipc.sockc.tsflags = sk->sk_tsflags;
+	ipc.addr = inet->inet_saddr;
+	ipc.oif = sk->sk_bound_dev_if;
+
+	/* no control msg support so far */
+
+	if (!ipc.opt) { /* always true */
+		struct ip_options_rcu *inet_opt;
+
+		rcu_read_lock();
+		inet_opt = rcu_dereference(inet->inet_opt);
+		if (inet_opt) {
+			memcpy(&opt_copy, inet_opt,
+			       sizeof(*inet_opt) + inet_opt->opt.optlen);
+			ipc.opt = &opt_copy.opt;
+			hlen += inet_opt->opt.optlen;
+		}
+		rcu_read_unlock();
+	}
+
+	saddr = ipc.addr;
+	ipc.addr = faddr = daddr;
+
+	sock_tx_timestamp(sk, ipc.sockc.tsflags, &ipc.tx_flags);
+
+	if (ipc.opt && ipc.opt->opt.srr) {
+		if (!daddr)
+			return -EINVAL;
+		faddr = ipc.opt->opt.faddr;
+	}
+	tos = get_rttos(&ipc, inet);
+	if (sock_flag(sk, SOCK_LOCALROUTE) ||
+	    (ipc.opt && ipc.opt->opt.is_strictroute)) {
+		tos |= RTO_ONLINK;
+	}
+	/* no multicast */
+	if (!ipc.oif)
+		ipc.oif = inet->uc_index;
+	/* route lookup */
+	if (!rt) /* always true */ {
+		struct net *net = sock_net(sk);
+		__u8 flow_flags = inet_sk_flowi_flags(sk);
+
+		fl4 = &fl4_stack;
+
+		flowi4_init_output(fl4, ipc.oif, sk->sk_mark, tos,
+				   RT_SCOPE_UNIVERSE, sk->sk_protocol,
+				   flow_flags,
+				   faddr, saddr, dport, inet->inet_sport);
+
+		if (!saddr && ipc.oif) {
+			err = l3mdev_get_saddr(net, ipc.oif, fl4);
+			if (err < 0)
+				goto out;
+		}
+
+		security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
+		rt = ip_route_output_flow(net, fl4, sk);
+		if (IS_ERR(rt)) {
+			D("error on ip_route_output_flow()");
+			err = PTR_ERR(rt);
+			rt = NULL;
+			if (err == -ENETUNREACH)
+				IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
+			goto out;
+		}
+
+		err = -EACCES;
+		if ((rt->rt_flags & RTCF_BROADCAST) &&
+		    !sock_flag(sk, SOCK_BROADCAST))
+			goto out;
+	}
+
+	saddr = fl4->saddr;
+	if (!ipc.addr)
+		daddr = ipc.addr = fl4->daddr;
+	/* Don't do lockless fastpath which alloc skb
+	 * But be careful that the original udp_sendmsg() assumes
+	 * non-corkreq case finishes here, never reaching the
+	 * following if statement
+	 */
+
+	/* why do we need this lock ? anyways, batch later */
+	lock_sock(sk);
+
+	fl4 = &inet->cork.fl.u.ip4;
+	fl4->daddr = daddr;
+	fl4->saddr = saddr;
+	fl4->fl4_dport = dport;
+	fl4->fl4_sport = inet->inet_sport;
+	up->pending = AF_INET;
+
+	up->len += ulen;
+
+	/*
+	 * Here is the main difference from udp_sendmsg().
+	 * We already have skb with user data, do equivalent to
+	 * ip_append_data() without skb allocation
+	 */
+	if (!skb_queue_empty(&sk->sk_write_queue))
+		D("queue is not empty");
+
+	m->ip_summed = CHECKSUM_NONE;
+	m->csum = 0;
+
+	/* remember: data already point to user data */
+	missmatch = hlen - skb_headroom(m);
+	if (missmatch) {
+		RD(1, "copy data for %d-byte extra headroom", missmatch);
+		if (missmatch > 0 && skb_tailroom(m) < missmatch) {
+			D("not enough tailroom %d", skb_tailroom(m));
+			release_sock(sk);
+			return EINVAL;
+		}
+		memcpy(m->data + missmatch, m->data, m->len);
+		skb_reserve(m, missmatch);
+		/* no need to shift shinfo and msghdr */
+	}
+
+	/*
+	 * Before set_network_header,
+	 * skb->data must point the beginning of IP header (see hh_len)
+	 * and skb->tail must point the end of data
+	 */
+	skb_push(m, sizeof(struct udphdr) + sizeof(struct iphdr));
+	skb_set_network_header(m, 0);
+	m->transport_header =
+		(m->network_header + sizeof(struct iphdr));
+	/* find where to start putting bytes */
+
+	cork->dst = &rt->dst;
+	rt = NULL; /* emulate ip_append_data() steals reference */
+	/* enqueuing to socket needed for subsequent ip_finish_skb()
+	 * called in udp_push_pending_frames()
+	 */
+	__skb_queue_tail(&sk->sk_write_queue, m);
+
+	/* XXX make sure that queued packet might be acked
+	 * before being stackmap_enqueued */
+	udp_push_pending_frames(sk);
+
+	/* postpone push_pending_frames for TCP compatibility */
+	release_sock(sk);
+out:
+	ip_rt_put(rt);
+	return 0;
+}
+
+void
+nm_os_stackmap_mbuf_recv(struct mbuf *m)
+{
+	m->protocol = eth_type_trans(m, m->dev);
+	netif_receive_skb(m);
+}
+
+int
+nm_os_stackmap_mbuf_send(struct mbuf *m)
+{
+	struct stackmap_cb *scb = STACKMAP_CB(m);
+	struct netmap_slot *slot = scb->slot;
+	struct netmap_adapter *na = scb->kring->na;
+	int fd = slot->fd;
+	struct stackmap_sk_adapter *ska;
+	NM_SOCK_T *sk;
+
+	ska = stackmap_ska_from_fd(na, fd);
+	if (!ska) {
+		D("no ska for fd %d", slot->fd);
+		return 0;
+	}
+	ND("ska found sk %p fd %d m %p", ska->sk, ska->fd, m);
+	sk = ska->sk;
+	if (sk->sk_protocol == IPPROTO_UDP) {
+		/* set mbuf data to point to user data */
+		skb_pull_inline(m, slot->offset - STACKMAP_DMA_OFFSET);
+		skb_set_owner_w(m, sk);
+		scb->flags |= SCB_M_QUEUED;
+		m->wifi_acked_valid = 1;
+		stackmap_udp_sendmsg(m);
+		/* m has been freed on success (scb still valid) */
+	} else {
+		D("no supported protocol %d", sk->sk_protocol);
+		return 0;
+	}
+	if (scb->flags & SCB_M_QUEUED) {
+		/* mbuf still alive */
+		scb->save_mbuf_destructor = m->destructor;
+		ND("queueing m %p (type 0x%x)", m, ntohs(*(uint16_t *)(m->head + 14)));
+		m->destructor = stackmap_mbuf_destructor;
+		if (stackmap_extra_enqueue(na, slot)) {
+			D("no more space for m %p data %p", m, m->head);
+			slot->flags |= NS_STUCK;
+			return -EBUSY;
+		}
+	} else {
+		ND("direct transmit m %p (type 0x%x)", m, ntohs(*(uint16_t *)(m->head + 14)));
+	}
+	return 0;
+}
+#endif /* WITH_STACK */
+
 /* Use ethtool to find the current NIC rings lengths, so that the netmap
    rings can have the same lengths. */
 int

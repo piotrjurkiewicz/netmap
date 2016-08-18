@@ -58,6 +58,11 @@
 #include <linux/io.h>	// virt_to_phys
 #include <linux/hrtimer.h>
 #include <linux/highmem.h> // kmap
+#include <linux/file.h> // sockfd_put()/fput()
+#include <net/ip.h>	// struct ipcm_cookie
+#include <uapi/linux/udp.h>	// struct udphdr
+#include <net/route.h>	// RTO_ONLINK
+#include <net/udp.h>	// udp_push_pending_frames
 
 #define KASSERT(a, b)		BUG_ON(!(a))
 
@@ -496,5 +501,58 @@ void netmap_bns_unregister(void);
 #endif
 
 #define if_printf(ifp, fmt, ...)  dev_info(&(ifp)->dev, fmt, ##__VA_ARGS__)
+#define strdup(s, type)		  kstrdup(s, GFP_ATOMIC)
+
+/* used for stackmap */
+#define NM_LIST_INIT(_head)	INIT_HLIST_HEAD(_head)
+#define NM_LIST_ENTRY(_type)	struct hlist_node
+#define NM_LIST_ADD(_head, _n, _pos) 	hlist_add_head_rcu(&((_n)->_pos), _head)
+#define NM_LIST_DEL(_n, _pos)	hlist_del_init_rcu(&((_n)->_pos))
+#define NM_LIST_FOREACH(_n, _head, _pos)		hlist_for_each_entry_rcu(_n, _head, _pos)
+#define NM_LIST_FOREACH_SAFE(_n, _head, _pos, _tvar)	hlist_for_each_entry_rcu(_n, _head, _pos)
+#define NM_LIST_HEAD	struct hlist_head
+
+#define NM_SOCK_T	struct sock
+#define NM_SOCK_LOCK(_s)	lock_sock(_s)
+#define NM_SOCK_UNLOCK(_s)	release_sock(_s)
+
+#define STACKMAP_CB(_m)	(struct stackmap_cb *) \
+	((uint8_t *)skb_shinfo((_m)) - sizeof(struct stackmap_cb))
+#define STACKMAP_CB_BUF(_buf, _bufsiz) (struct stackmap_cb *) 		\
+	((_buf) + (_bufsiz) - sizeof(struct skb_shared_info) -		\
+	 sizeof(struct stackmap_cb))
+
+static inline struct stackmap_sk_adapter *
+stackmap_sk(NM_SOCK_T *sk)
+{
+	uintptr_t p = *(uint64_t *)(uintptr_t)&sk->sk_cookie;
+	return (struct stackmap_sk_adapter *)p;
+}
+
+ /* We overwrite sk->sk_cookie as it appear not to be used */
+static inline void
+stackmap_wsk(struct stackmap_sk_adapter *ska, NM_SOCK_T *sk)
+{
+	*(uint64_t *)(uintptr_t)&sk->sk_cookie = (uintptr_t)ska;
+}
+
+#define ETH_HDR_LEN	ETH_HLEN
+
+/* Since FreeBSD doesn't have generic callback for a receive-data-ready event,
+ * we so far use a bit high level macro, also for destructor..
+ */
+#define SAVE_DATA_READY(sk, ska) \
+	(ska)->save_sk_data_ready = (sk)->sk_data_ready
+#define RESTORE_DATA_READY(sk, ska) \
+	(sk)->sk_data_ready = (void *)(ska)->save_sk_data_ready
+#define SAVE_DESTRUCTOR(sk, ska) \
+	(ska)->save_sk_destruct = (sk)->sk_destruct
+#define RESTORE_DESTRUCTOR(sk, ska) \
+	(sk)->sk_destruct = (void *)(ska)->save_sk_destruct
+#define SET_DATA_READY(sk, f) \
+	(sk)->sk_data_ready = (void *)f
+#define SET_DESTRUCTOR(sk, f) \
+	(sk)->sk_destruct = (void *)f
+#define MBUF_HEADLEN(m)		skb_headlen(m) /* m->pkthdr.len in FreeBSD */
 
 #endif /* NETMAP_BSD_GLUE_H */

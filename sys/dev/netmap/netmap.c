@@ -910,8 +910,6 @@ netmap_hw_krings_delete(struct netmap_adapter *na)
 	netmap_krings_delete(na);
 }
 
-
-
 /*
  * Undo everything that was done in netmap_do_regif(). In particular,
  * call nm_register(ifp,0) to stop netmap mode on the interface and
@@ -1281,7 +1279,10 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 			int len = MBUF_LEN(m);
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
-			m_copydata(m, 0, len, NMB(na, slot));
+			//uint16_t t;
+			//t = ntohs(*(uint16_t *)(m->data + 12));
+			//D("head %p data %p to %p type 0x%x", m->head, m->data, NMB(na, slot) + 2, t);
+			m_copydata(m, 0, len, NMB(na, slot) + 2);
 			ND("nm %d len %d", nm_i, len);
 			if (netmap_verbose)
                                 D("%s", nm_dump_buf(NMB(na, slot),len, 128, NULL));
@@ -1480,6 +1481,14 @@ netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na,
 	error = netmap_get_pipe_na(nmr, na, nmd, create);
 	if (error || *na != NULL)
 		goto out;
+
+	/* try to see if this is a stackmap port */
+	error = netmap_get_stackmap_na(nmr, na, create);
+	if (error)
+	       return error;
+	if (*na != NULL) {
+		goto out;
+	}
 
 	/* try to see if this is a bridge port */
 	error = netmap_get_bdg_na(nmr, na, nmd, create);
@@ -2214,7 +2223,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 	switch (cmd) {
 	case NIOCGINFO:		/* return capabilities etc */
 		if (nmr->nr_cmd == NETMAP_BDG_LIST) {
-			error = netmap_bdg_ctl(nmr, NULL);
+			error = netmap_bdg_ctl(nmr, NULL, 0);
 			break;
 		}
 
@@ -2273,7 +2282,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 				|| i == NETMAP_BDG_POLLING_ON
 				|| i == NETMAP_BDG_POLLING_OFF) {
 			/* possibly attach/detach NIC and VALE switch */
-			error = netmap_bdg_ctl(nmr, NULL);
+			error = netmap_bdg_ctl(nmr, NULL, 0);
 			break;
 		} else if (i == NETMAP_PT_HOST_CREATE || i == NETMAP_PT_HOST_DELETE) {
 			/* forward the command to the ptnetmap subsystem */
@@ -2382,7 +2391,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 				if (netmap_verbose)
 					D("requested %d extra buffers", nmr->nr_arg3);
 				nmr->nr_arg3 = netmap_extra_alloc(na,
-					&nifp->ni_bufs_head, nmr->nr_arg3);
+					&nifp->ni_bufs_head, nmr->nr_arg3, 0);
 				if (netmap_verbose)
 					D("got %d extra buffers", nmr->nr_arg3);
 			}

@@ -637,11 +637,20 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 	char errmsg[MAXERRMSG] = "";
 	long num;
 	uint16_t nr_arg2 = 0;
-	enum { P_START, P_RNGSFXOK, P_GETNUM, P_FLAGS, P_FLAGSOK, P_MEMID } p_state;
+	enum { P_START, P_RNGSFXOK, P_GETNUM, P_FLAGS, P_FLAGSOK, P_MEMID, P_GETSUFF } p_state;
 
 	errno = 0;
+	char suffix[NETMAP_SUFFIX_LEN];
 
-	is_vale = (ifname[0] == 'v');
+	bzero(suffix, sizeof(suffix));
+	if (strncmp(ifname, "netmap:", 7) &&
+			strncmp(ifname, NM_BDG_NAME, strlen(NM_BDG_NAME))
+			&& strncmp(ifname, "stack", 5)) {
+		errno = 0; /* name not recognised, not an error */
+		goto fail;
+	}
+
+	is_vale = (ifname[0] == 'v') || (ifname[0] == 's');
 	if (is_vale) {
 		port = index(ifname, ':');
 		if (port == NULL) {
@@ -662,7 +671,7 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 	}
 
 	/* scan for a separator */
-	for (; *port && !index("-*^{}/@", *port); port++)
+	for (; *port && !index("-*^{}/@+", *port); port++)
 		;
 
 	if (is_vale && !nm_is_identifier(vpname, port)) {
@@ -709,6 +718,10 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 				break;
 			case '@': /* start of memid */
 				p_state = P_MEMID;
+				break;
+			case '+': /* start of extra string */
+				nr_flags |= NR_SUFFIX;
+				p_state = P_GETSUFF;
 				break;
 			default:
 				snprintf(errmsg, MAXERRMSG, "unknown modifier: '%c'", *port);
@@ -784,6 +797,15 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 				goto fail;
 			}
 			nr_arg2 = num;
+			p_state = P_RNGSFXOK;
+			break;
+		case P_GETSUFF:
+			if (sizeof(suffix) <= strlen(port)) {
+				snprintf(errmsg, MAXERRMSG, "str too short");
+				goto fail;
+			}
+			strncpy(suffix, port, sizeof(suffix));
+			port += strlen(port);
 			p_state = P_RNGSFXOK;
 			break;
 		}
@@ -914,6 +936,9 @@ nm_open(const char *ifname, const struct nmreq *req,
 	/* add the *XPOLL flags */
 	d->req.nr_ringid |= new_flags & (NETMAP_NO_TX_POLL | NETMAP_DO_RX_POLL);
 
+	if (nr_flags & NR_SUFFIX) {
+		strncpy(d->req.nr_suffix, suffix, sizeof(d->req.nr_suffix));
+	}
 	if (ioctl(d->fd, NIOCREGIF, &d->req)) {
 		snprintf(errmsg, MAXERRMSG, "NIOCREGIF failed: %s", strerror(errno));
 		goto fail;

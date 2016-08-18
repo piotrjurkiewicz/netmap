@@ -42,6 +42,9 @@
 #endif
 #if  defined(CONFIG_NETMAP_VALE)
 #define WITH_VALE
+#if defined(CONFIG_NETMAP_STACK)
+#define WITH_STACK
+#endif
 #endif
 #if defined(CONFIG_NETMAP_PIPE)
 #define WITH_PIPES
@@ -75,6 +78,7 @@
 #define WITH_GENERIC
 #define WITH_PTNETMAP_HOST	/* ptnetmap host support */
 #define WITH_PTNETMAP_GUEST	/* ptnetmap guest support */
+#define WITH_STACK
 
 #endif
 
@@ -515,6 +519,9 @@ struct netmap_kring {
 #ifdef WITH_VALE
 	int (*save_notify)(struct netmap_kring *kring, int flags);
 #endif
+#ifdef WITH_STACK
+	uint32_t	nkr_ft_cur; /* used in stackmap */
+#endif /* WITH_STACK */
 
 #ifdef WITH_MONITOR
 	/* array of krings that are monitoring this kring */
@@ -674,10 +681,12 @@ struct netmap_adapter {
 #define NAF_HOST_RINGS  64	/* the adapter supports the host rings */
 #define NAF_FORCE_NATIVE 128	/* the adapter is always NATIVE */
 #define NAF_PTNETMAP_HOST 256	/* the adapter supports ptnetmap in the host */
+#define NAF_MEM_REG_PRIV 512	/* allocator is replaced from global one */
 #define NAF_ZOMBIE	(1U<<30) /* the nic driver has been unloaded */
 #define	NAF_BUSY	(1U<<31) /* the adapter is used internally and
 				  * cannot be registered from userspace
 				  */
+#define NAF_BDG_MBUF    512     /* mem wants parallel mbufs */
 	int active_fds; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -1017,6 +1026,9 @@ struct netmap_bwrap_adapter {
 int netmap_bwrap_attach(const char *name, struct netmap_adapter *);
 int netmap_vi_create(struct nmreq *, int);
 
+//int nm_is_bwrap(struct netmap_adapter *);
+int nm_bdg_prefix(const char *name);
+
 #else /* !WITH_VALE */
 #define netmap_vi_create(nmr, a) (EOPNOTSUPP)
 #endif /* WITH_VALE */
@@ -1040,6 +1052,54 @@ struct netmap_pipe_adapter {
 };
 
 #endif /* WITH_PIPES */
+
+#ifdef WITH_STACK
+struct stackmap_sk_adapter {
+	NM_SOCK_T *sk;
+	int32_t fd;
+	/* 32 bit hole */
+	struct netmap_adapter *na;
+	void (*save_sk_data_ready)(NM_SOCK_T *);
+	void (*save_sk_destruct)(NM_SOCK_T *);
+	NM_LIST_ENTRY(stackmap_sk_adapter) next;
+};
+
+struct stackmap_adapter {
+	struct netmap_vp_adapter up;
+	NM_LIST_HEAD sk_adapters;
+	int (*save_reg)(struct netmap_adapter *na, int onoff);
+	uint32_t *extra_bufs;
+	struct netmap_slot *extra_slots;
+	u_int extra_num;
+	char suffix[NETMAP_SUFFIX_LEN];	/* copy of nr_suffix in nmr */
+	void *save_sk_data_ready;
+	struct net_device_ops stackmap_ndo;
+};
+
+/* to be embedded in the buf */
+/* struct skb_shared_info takes 320 byte so far.
+ * Just for the case we would keep occupancy to 1600 Byte before this
+ * We have budget of 40 byte for each of msghdr and cb
+ * after 1520 data+headroom
+ */
+struct stackmap_cb {
+	struct netmap_kring *kring; // to reach scratchpad
+	struct netmap_slot *slot; // might not linked to any ring
+	void (*save_mbuf_destructor)(struct mbuf *m);
+#define SCB_M_ORIGIN	0x01
+#define SCB_M_TRANSMIT	0x02
+#define SCB_M_QUEUED	0x04
+	uint8_t flags;
+	/* 7 byte hole for 8 byte alignment */
+}__attribute__((__packed__)); // 25 byte so far
+
+int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
+netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
+void nm_os_stackmap_data_ready(NM_SOCK_T *);
+void stackmap_add_fdtable(struct stackmap_cb *, char *);
+NM_SOCK_T *nm_os_sock_fget(int);
+void nm_os_sock_fput(NM_SOCK_T *);
+#endif /* WITH_STACK */
 
 
 /* return slots reserved to rx clients; used in drivers */
@@ -1194,6 +1254,7 @@ int netmap_attach(struct netmap_adapter *);
 int netmap_attach_ext(struct netmap_adapter *, size_t size, int override_reg);
 void netmap_detach(struct ifnet *);
 int netmap_transmit(struct ifnet *, struct mbuf *);
+int stackmap_transmit(struct ifnet *, struct mbuf *);
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);
 int netmap_ring_reinit(struct netmap_kring *);
@@ -1227,6 +1288,13 @@ int netmap_common_irq(struct netmap_adapter *, u_int, u_int *work_done);
 #define netmap_ifp_to_host_vp(_ifp) (NA(_ifp)->na_hostvp)
 #define netmap_bdg_idx(_vp)	((_vp)->bdg_port)
 const char *netmap_bdg_name(struct netmap_vp_adapter *);
+struct netmap_vp_adapter *netmap_bdg_port(struct nm_bridge *b, int i);
+u_int netmap_bdg_active_ports(struct nm_bridge *b);
+void netmap_set_bdg_port(struct nm_bridge *b, int i, struct netmap_vp_adapter *vpna);
+int netmap_bdg_rlock(struct nm_bridge *b, struct netmap_adapter *na);
+void netmap_bdg_runlock(struct nm_bridge *b);
+void netmap_bdg_wlock(struct nm_bridge *b);
+void netmap_bdg_wunlock(struct nm_bridge *b);
 #else /* !WITH_VALE */
 #define netmap_vp_to_ifp(_vp)	NULL
 #define netmap_ifp_to_vp(_ifp)	NULL
@@ -1421,6 +1489,7 @@ void netmap_unget_na(struct netmap_adapter *na, struct ifnet *ifp);
 int netmap_get_hw_na(struct ifnet *ifp,
 		struct netmap_mem_d *nmd, struct netmap_adapter **na);
 
+void netmap_replace_mem(struct netmap_adapter *na, struct netmap_mem_d *mem);
 
 #ifdef WITH_VALE
 /*
@@ -1434,7 +1503,7 @@ int netmap_get_hw_na(struct ifnet *ifp,
  */
 typedef u_int (*bdg_lookup_fn_t)(struct nm_bdg_fwd *ft, uint8_t *ring_nr,
 		struct netmap_vp_adapter *);
-typedef int (*bdg_config_fn_t)(struct nm_ifreq *);
+typedef int (*bdg_config_fn_t)(struct nm_ifreq *, struct netmap_vp_adapter *);
 typedef void (*bdg_dtor_fn_t)(const struct netmap_vp_adapter *);
 struct netmap_bdg_ops {
 	bdg_lookup_fn_t lookup;
@@ -1457,8 +1526,10 @@ struct nm_bridge *netmap_init_bridges2(u_int);
 void netmap_uninit_bridges2(struct nm_bridge *, u_int);
 int netmap_init_bridges(void);
 void netmap_uninit_bridges(void);
-int netmap_bdg_ctl(struct nmreq *nmr, struct netmap_bdg_ops *bdg_ops);
+int netmap_bdg_ctl(struct nmreq *nmr, struct netmap_bdg_ops *bdg_ops, int locked);
 int netmap_bdg_config(struct nmreq *nmr);
+/* For internal modules (e.g., stackmap) */
+void netmap_bdg_set_ops(struct nm_bridge *b, struct netmap_bdg_ops *);
 
 #else /* !WITH_VALE */
 #define	netmap_get_bdg_na(_1, _2, _3, _4)	0
@@ -1491,6 +1562,14 @@ void netmap_monitor_stop(struct netmap_adapter *na);
 #define netmap_get_monitor_na(nmr, _2, _3, _4) \
 	((nmr)->nr_flags & (NR_MONITOR_TX | NR_MONITOR_RX) ? EOPNOTSUPP : 0)
 #endif
+
+#ifdef WITH_STACK
+#define STACKMAP_DMA_OFFSET	2
+int stackmap_reg(struct netmap_adapter *, int);
+int netmap_get_stackmap_na(struct nmreq *nmr, struct netmap_adapter **ret, int create);
+#else /* !WITH_STACK */
+#define netmap_get_stackmap_na(_1, _2, _3)	0
+#endif /* !WITH_STACK */
 
 #ifdef CONFIG_NET_NS
 struct net *netmap_bns_get(void);
@@ -1943,6 +2022,53 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #define na_is_generic(na)		(0)
 #endif /* WITH_GENERIC */
 
+#ifdef WITH_STACK
+struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
+void nm_os_stackmap_mbuf_recv(struct mbuf *);
+int nm_os_stackmap_mbuf_send(struct mbuf *);
+struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
+void stackmap_mbuf_destructor(struct mbuf *);
+/* TODO: avoid linear search... */
+static inline int
+stackmap_extra_enqueue(struct netmap_adapter *na,
+	struct netmap_slot *slot)
+{
+	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
+	struct netmap_slot *slots = sna->extra_slots;
+	int i, n = sna->extra_num;
+
+	for (i = 0; i < n; i++) {
+		struct netmap_slot *extra = &slots[i];
+		struct netmap_slot tmp;
+		struct stackmap_cb *scb;
+
+		if (extra->len) /* in use */
+			continue;
+		scb = STACKMAP_CB_BUF(NMB(na, slot),
+				NETMAP_BUF_SIZE(na));
+		scb->kring = NULL;
+		scb->slot = extra;
+
+		slot->flags &= ~NS_STUCK;
+
+		tmp = *extra;
+		*extra = *slot;
+		/* no need for NS_BUF_CHANGED on extra slot */
+		KASSERT(slot->buf_idx != 0,
+		    "source slot has buf_idx 0");
+		KASSERT(tmp.buf_idx != 0,
+		    "extra slot has buf_idx 0");
+		slot->buf_idx = tmp.buf_idx;
+		slot->flags |= NS_BUF_CHANGED;
+		slot->len = slot->offset = slot->next = 0;
+		slot->fd = 0;
+		return 0;
+	}
+	return EBUSY;
+}
+
+#endif /* WITH_STACK */
+
 /* Shared declarations for the VALE switch. */
 
 /*
@@ -2145,5 +2271,36 @@ int ptnet_nm_krings_create(struct netmap_adapter *na);
 void ptnet_nm_krings_delete(struct netmap_adapter *na);
 void ptnet_nm_dtor(struct netmap_adapter *na);
 #endif /* WITH_PTNETMAP_GUEST */
+
+static inline struct page *
+netmap_virt_to_page_and_off(void *v, unsigned long *off)
+{
+	*off = offset_in_page(v);
+	return virt_to_page(v);
+}
+
+static inline void
+DR(struct netmap_kring *kring, int start, int n)
+{
+	struct netmap_adapter *na = kring->na;
+	int i, end;
+	int lim = kring->nkr_num_slots - 1;
+
+	end = start + n;
+	if (end > lim)
+		end -= lim + 1;
+
+	for (i = 0; i != end; i = i == lim ? 0 : i + 1) {
+		struct netmap_slot *slot = &kring->ring->slot[i];
+		int buf_idx = slot->buf_idx;
+		char *buf = NMB(na, slot);
+		struct page *page;
+		unsigned long off;
+
+		page = netmap_virt_to_page_and_off(buf, &off);
+		D("slot[%d] buf[%d] %p page %p off %lu", i, buf_idx, buf, page, off);
+	}
+}
+
 
 #endif /* _NET_NETMAP_KERN_H_ */
