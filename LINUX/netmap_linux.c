@@ -870,8 +870,8 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	ND("skb %p data %p page %p ref %d", m, buf, page, page_ref_count(page));
 	m->dev = na->ifp;
 	//if (na == stackmap_master(na))
-	skb_reserve(m, STACKMAP_DMA_OFFSET);
-	skb_put(m, len); // advance m->tail and increment m->len
+	skb_reserve(m, STACKMAP_DMA_OFFSET); // m->data and tail
+	skb_put(m, len - STACKMAP_DMA_OFFSET); // advance m->tail and increment m->len
 	return m;
 }
 
@@ -1047,7 +1047,6 @@ stackmap_udp_sendmsg(struct mbuf *m)
 		D("queue is not empty");
 
 	m->ip_summed = CHECKSUM_NONE;
-	m->csum = 0;
 
 	/* remember: data already point to user data */
 	missmatch = hlen - skb_headroom(m);
@@ -1108,6 +1107,7 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 	int fd = slot->fd;
 	struct stackmap_sk_adapter *ska;
 	NM_SOCK_T *sk;
+	u_int headroom = na->virt_hdr_len + slot->offset;
 
 	ska = stackmap_ska_from_fd(na, fd);
 	if (!ska) {
@@ -1116,9 +1116,14 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 	}
 	ND("ska found sk %p fd %d m %p", ska->sk, ska->fd, m);
 	sk = ska->sk;
+
+	/* checksum */
+	m->csum = nm_os_csum_raw(NMB(na, slot) + 
+			headroom, slot->len - headroom, 0);
+
 	if (sk->sk_protocol == IPPROTO_UDP) {
 		/* set mbuf data to point to user data */
-		skb_pull_inline(m, slot->offset - STACKMAP_DMA_OFFSET);
+		skb_pull_inline(m, slot->offset);
 		skb_set_owner_w(m, sk);
 		scb->flags |= SCB_M_QUEUED;
 		m->wifi_acked_valid = 1;

@@ -465,13 +465,6 @@ static int stackmap_bdg_flush(struct netmap_kring *kring)
 			struct nm_bdg_fwd *ft_p = ft + next;
 			struct netmap_slot *ts, *rs, tmp;
 			struct stackmap_cb *scb;
-			uint16_t debug, *debugp;
-
-			debugp = (uint16_t *)(ft_p->ft_buf + STACKMAP_DMA_OFFSET + 12);
-			debug = ntohs(*debugp);
-			if (debug != 0x0800 && debug != 0x0806 && debug != 0x86dd)
-			//if (host)
-				D("sending ft %p next %u buf %p type %x (-2 %x +2 %x)", ft, next, ft_p->ft_buf, debug, ntohs(*(debugp-1)), ntohs(*(debugp+1)));
 
 			next = ft_p->ft_next;
 
@@ -734,6 +727,16 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		vpna = &bna->up.up;
 		hwna = bna->hwna;
 
+		/* For the first slave now it is the first time to have ifp
+		 * We must set buffer offset before finalizing at nm_bdg_ctl()
+		 * callback. As we see, we adopt the value for the first NIC */
+		if (!na->virt_hdr_len) {
+			na->virt_hdr_len = LL_RESERVED_SPACE(hwna->ifp) -
+				hwna->ifp->hard_header_len;
+			netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
+		}
+		KASSERT(na->virt_hdr_len == 2, ("virt_hdr_len %u!\n", na->virt_hdr_len));
+
 		KASSERT(na->nm_mem == slave->nm_mem, "slave has different mem");
 		error = slave->nm_bdg_ctl(slave, &nmr, 1);
 		if (error) {
@@ -925,7 +928,7 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 
 		/* install config handler */
 		netmap_bdg_set_ops(sna->up.na_bdg, &ops);
-		netmap_mem_set_buf_offset(na->nm_mem, STACKMAP_DMA_OFFSET);
+		//netmap_mem_set_buf_offset(na->nm_mem, STACKMAP_DMA_OFFSET);
 		return stackmap_reg_slaves(na);
 	}
 

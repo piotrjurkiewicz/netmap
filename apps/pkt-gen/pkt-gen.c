@@ -1142,17 +1142,12 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
 			slot->flags |= NS_INDIRECT;
 			slot->ptr = (uint64_t)((uintptr_t)frame);
 		} else if ((options & OPT_COPY) || buf_changed) {
+			nm_pkt_copy(frame, p, size);
 			if (g->soff) {
-				struct nm_msghdr *msg;
-
-				nm_pkt_copy(frame, p + g->soff,
-						size - (g->soff - 2));
 				slot->offset = g->soff;
 				slot->fd = g->sfd;
-				msg = (struct nm_msghdr *)(p + size + 2);
-				*msg = g->nmsg;
-			} else
-			nm_pkt_copy(frame, p, size);
+				*(struct nm_msghdr *)(p + size) = g->nmsg;
+			}
 			if (fcnt == nfrags)
 				update_addresses(pkt, g);
 		} else if (options & OPT_MEMCPY) {
@@ -1517,8 +1512,10 @@ sender_body(void *data)
 		size = targ->g->pkt_size;
 	}
 	if (targ->g->dev_type == DEV_NETMAP &&
-	    !strncmp(targ->g->ifname, "stack", 5))
+	    !strncmp(targ->g->ifname, "stack", 5)) {
 		pfd.events |= POLLIN; /* for ARP exchange on PULL mode */
+		targ->g->soff = 14+20+8;
+	}
 
 	D("start, fd %d main_fd %d", targ->fd, targ->g->main_fd);
 	if (setaffinity(targ->thread, targ->affinity))
@@ -2709,6 +2706,7 @@ main(int arc, char **argv)
 	g.nmr_config = "";
 	g.virt_header = 0;
 	g.wait_link = 2;
+	g.soff = 0;
 
 	while ((ch = getopt(arc, argv, "46a:f:F:n:i:Il:d:s:D:S:b:c:o:p:"
 	    "T:w:WvR:XC:H:e:E:m:rP:zZA")) != -1) {
@@ -3038,9 +3036,6 @@ main(int arc, char **argv)
 			close(sfd);
 			goto out;
 		}
-
-		g.soff = 2 + 14 + 20 + 8;
-		g.sfd = sfd;
 
 		bzero(&ifreq, sizeof(ifreq));
 		p = index(g.ifname, '+');

@@ -1448,6 +1448,7 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 	 * needed only for special case (e.g., IOMMU or Xen) */
 	o = netmap_mem_pdev_offset(na->nm_mem);
 	if (o) {
+		D("reloading mapping by %u", o);
 		for (i = 2; i < lim; i++) {
 			netmap_reload_map(na,
 				(bus_dma_tag_t) na->pdev,&p->lut[i].paddr,
