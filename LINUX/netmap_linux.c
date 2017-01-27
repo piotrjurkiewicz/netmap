@@ -796,6 +796,11 @@ nm_os_generic_set_features(struct netmap_generic_adapter *gna)
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
+u_int nm_os_hw_headroom(struct ifnet *ifp)
+{
+	return LL_RESERVED_SPACE(ifp) - ifp->hard_header_len;
+}
+
 void
 nm_os_stackmap_restore_data_ready(NM_SOCK_T *sk,
 				  struct stackmap_sk_adapter *ska)

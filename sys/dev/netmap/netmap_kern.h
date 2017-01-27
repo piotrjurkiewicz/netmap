@@ -1096,6 +1096,7 @@ struct stackmap_cb {
 int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
 netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
 void nm_os_stackmap_data_ready(NM_SOCK_T *);
+u_int nm_os_hw_headroom(struct ifnet *ifp);
 void stackmap_add_fdtable(struct stackmap_cb *, char *);
 NM_SOCK_T *nm_os_sock_fget(int);
 void nm_os_sock_fput(NM_SOCK_T *);

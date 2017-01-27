@@ -731,8 +731,7 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		 * We must set buffer offset before finalizing at nm_bdg_ctl()
 		 * callback. As we see, we adopt the value for the first NIC */
 		if (!na->virt_hdr_len) {
-			na->virt_hdr_len = LL_RESERVED_SPACE(hwna->ifp) -
-				hwna->ifp->hard_header_len;
+			na->virt_hdr_len = nm_os_hw_headroom(hwna->ifp);
 			netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 		}
 		KASSERT(na->virt_hdr_len == 2, ("virt_hdr_len %u!\n", na->virt_hdr_len));
