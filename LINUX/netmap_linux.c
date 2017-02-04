@@ -999,11 +999,14 @@ stackmap_udp_sendmsg(struct mbuf *m)
 				   flow_flags,
 				   faddr, saddr, dport, inet->inet_sport);
 
+		/* XXX l3mdev_get_saddr() doesn't exist in 4.9 */
+		/*
 		if (!saddr && ipc.oif) {
 			err = l3mdev_get_saddr(net, ipc.oif, fl4);
 			if (err < 0)
 				goto out;
 		}
+		*/
 
 		security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
 		rt = ip_route_output_flow(net, fl4, sk);
