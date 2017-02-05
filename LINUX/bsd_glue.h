@@ -516,11 +516,11 @@ void netmap_bns_unregister(void);
 #define NM_SOCK_LOCK(_s)	lock_sock(_s)
 #define NM_SOCK_UNLOCK(_s)	release_sock(_s)
 
-#define STACKMAP_CB(_m)	(struct stackmap_cb *) \
-	((uint8_t *)skb_shinfo((_m)) - sizeof(struct stackmap_cb))
-#define STACKMAP_CB_BUF(_buf, _bufsiz) (struct stackmap_cb *) 		\
-	((_buf) + (_bufsiz) - sizeof(struct skb_shared_info) -		\
-	 sizeof(struct stackmap_cb))
+#define STACKMAP_CB(_m)	((struct stackmap_cb *) \
+	((uint8_t *)skb_shinfo((_m)) - sizeof(struct stackmap_cb)))
+#define STACKMAP_CB_BUF(_buf, _bufsiz) ((struct stackmap_cb *) 		\
+	((uint8_t *)(_buf) + (_bufsiz) - sizeof(struct skb_shared_info) \
+	 - sizeof(struct stackmap_cb)))
 
 static inline struct stackmap_sk_adapter *
 stackmap_sk(NM_SOCK_T *sk)

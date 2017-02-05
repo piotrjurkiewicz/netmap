@@ -406,9 +406,9 @@ static int stackmap_bdg_flush(struct netmap_kring *kring)
 		scb->kring = kring;
 		scb->slot = slot;
 
-		if (rx)
+		if (rx) {
 			nm_os_stackmap_mbuf_recv(m);
-		else {
+		} else {
 			if (nm_os_stackmap_mbuf_send(m))
 				break;
 			/* know we know packet has been queued
@@ -733,6 +733,7 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		if (!na->virt_hdr_len) {
 			na->virt_hdr_len = nm_os_hw_headroom(hwna->ifp);
 			netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
+			vpna->virt_hdr_len = na->virt_hdr_len; /* for RX path */
 		}
 		KASSERT(na->virt_hdr_len == 2, ("virt_hdr_len %u!\n", na->virt_hdr_len));
 

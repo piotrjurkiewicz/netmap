@@ -1102,6 +1102,7 @@ out:
 void
 nm_os_stackmap_mbuf_recv(struct mbuf *m)
 {
+	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
 	netif_receive_skb(m);
 }
