@@ -1470,6 +1470,17 @@ EOF
 	}
 EOF
 
+  # check for SO_TIMESTAMPING in sock
+  add_test 'have SO_TIMESTAMPING' <<EOF
+	#include <net/sock.h>
+	#include <net/ip.h>
+
+	void
+	dummy(struct sock *sk, struct ipcm_cookie *ipc) {
+		sock_tx_timestamp(sk, ipc->sockc.tsflags, &ipc->tx_flags);
+	}
+EOF
+
   #####################################################
   # checks related to drivers                         #
   #####################################################

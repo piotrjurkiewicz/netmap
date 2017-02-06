@@ -949,7 +949,9 @@ stackmap_udp_sendmsg(struct mbuf *m)
 	} else { /* no connected socket support so far */
 		return EINVAL;
 	}
+#ifdef NETMAP_LINUX_HAVE_SO_TIMESTAMPING /* sockc member */
 	ipc.sockc.tsflags = sk->sk_tsflags;
+#endif /* NETMAP_LINUX_HAVE_SO_TIMESTAMPING */
 	ipc.addr = inet->inet_saddr;
 	ipc.oif = sk->sk_bound_dev_if;
 
@@ -972,7 +974,9 @@ stackmap_udp_sendmsg(struct mbuf *m)
 	saddr = ipc.addr;
 	ipc.addr = faddr = daddr;
 
+#ifdef NETMAP_LINUX_HAVE_SO_TIMESTAMPING
 	sock_tx_timestamp(sk, ipc.sockc.tsflags, &ipc.tx_flags);
+#endif /* NETMAP_LINUX_HAVE_SO_TIMESTAMPING */
 
 	if (ipc.opt && ipc.opt->opt.srr) {
 		if (!daddr)
