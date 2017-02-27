@@ -896,7 +896,7 @@ static int
 stackmap_udp_sendmsg(struct mbuf *m)
 {
 	NM_SOCK_T *sk = m->sk;
-	struct nm_msghdr *nmsg;
+	struct nm_msghdr *nmsg = NULL;
 
 	struct inet_sock *inet = inet_sk(sk);
 	struct udp_sock *up = udp_sk(sk);
@@ -905,6 +905,7 @@ stackmap_udp_sendmsg(struct mbuf *m)
 	size_t ulen = m->len;
 	struct ipcm_cookie ipc;
 	struct rtable *rt = NULL;
+	int connected = 0;
 	__be32 daddr, faddr, saddr;
 	__be16 dport;
 	u8  tos;
@@ -917,10 +918,25 @@ stackmap_udp_sendmsg(struct mbuf *m)
 	    sizeof(struct iphdr) + sizeof(struct udphdr);
 
 	KASSERT(cork->opt == NULL, "cork->opt is non NULL");
+
+	/* There maybe a valid nmsg
+	 * XXX Maybe optimize by skipping this in ESTABLISHED state, avoiding 
+	 * touching skb->tail.
+	 * XXX do better way to invalidate nmsg
+	 */
+	if (likely(skb_tailroom(m) >= sizeof(*nmsg))) {
+		nmsg = (struct nm_msghdr *)skb_tail_pointer(m);
+		/* likely() because non-connected case is anyways slow */
+		/* XXX do better way to invalidate nmsg */
+		if (likely(nmsg->nmsg_namelen < sizeof(struct sockaddr_in *)))
+			nmsg = NULL;
+	}
+
 	/* we expect the user embedded msg after data */
 	if (skb_end_pointer(m) - skb_tail_pointer(m) < sizeof(*nmsg))
 		return EINVAL;
-	nmsg = (struct nm_msghdr *)(skb_tail_pointer(m));
+	if (sk->sk_state != TCP_ESTABLISHED) /* XXX do better */
+		nmsg = (struct nm_msghdr *)(skb_tail_pointer(m));
 
 	ipc.opt = NULL;
 	ipc.tx_flags = 0;
@@ -935,7 +951,7 @@ stackmap_udp_sendmsg(struct mbuf *m)
 
 	ulen += sizeof(struct udphdr);
 
-	if (nmsg->nmsg_namelen) {
+	if (nmsg) {
 		struct sockaddr_in *sin =
 			(struct sockaddr_in *)nmsg->nmsg_name;
 		if (sin->sin_family != AF_INET) {
@@ -947,7 +963,11 @@ stackmap_udp_sendmsg(struct mbuf *m)
 			return -EINVAL;
 		}
 	} else { /* no connected socket support so far */
-		return EINVAL;
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -EDESTADDRREQ;
+		daddr = inet->inet_daddr;
+		dport = inet->inet_dport;
+		connected = 1;
 	}
 #ifdef NETMAP_LINUX_HAVE_SO_TIMESTAMPING /* sockc member */
 	ipc.sockc.tsflags = sk->sk_tsflags;
@@ -992,7 +1012,11 @@ stackmap_udp_sendmsg(struct mbuf *m)
 	if (!ipc.oif)
 		ipc.oif = inet->uc_index;
 	/* route lookup */
-	if (!rt) /* always true */ {
+	if (connected) {
+		rt = (struct rtable *)sk_dst_check(sk, 0);
+		ND("connected %p", rt);
+	}
+	if (!rt) {
 		struct net *net = sock_net(sk);
 		__u8 flow_flags = inet_sk_flowi_flags(sk);
 
@@ -1020,6 +1044,13 @@ stackmap_udp_sendmsg(struct mbuf *m)
 			rt = NULL;
 			if (err == -ENETUNREACH)
 				IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
+			goto out;
+		}
+
+		/* XXX Drop packets not going to a netmap port */
+		if (!NM_NA_VALID(rt->dst.dev)) {
+			D("output if %s is not netmap mode", rt->dst.dev->name);
+			err = -EINVAL;
 			goto out;
 		}
 
@@ -1108,6 +1139,8 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 {
 	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
+	if (ntohs(m->protocol) == 0x0806)
+		D("receiving ARP");
 	netif_receive_skb(m);
 }
 
@@ -1121,13 +1154,14 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 	struct stackmap_sk_adapter *ska;
 	NM_SOCK_T *sk;
 	u_int headroom = na->virt_hdr_len + slot->offset;
+	int error = 0;
 
 	ska = stackmap_ska_from_fd(na, fd);
 	if (!ska) {
 		D("no ska for fd %d", slot->fd);
 		return 0;
 	}
-	ND("ska found sk %p fd %d m %p", ska->sk, ska->fd, m);
+	ND("ska found sk %p fd %d m %p m->sk %p", ska->sk, ska->fd, m, m->sk);
 	sk = ska->sk;
 
 	/* checksum */
@@ -1140,7 +1174,12 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 		skb_set_owner_w(m, sk);
 		scb->flags |= SCB_M_QUEUED;
 		m->wifi_acked_valid = 1;
-		stackmap_udp_sendmsg(m);
+
+		error = stackmap_udp_sendmsg(m);
+		if (error < 0) {
+			scb->flags &= ~SCB_M_QUEUED;
+			m_freem(m);
+		}
 		/* m has been freed on success (scb still valid) */
 	} else {
 		D("no supported protocol %d", sk->sk_protocol);
@@ -1149,10 +1188,10 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 	if (scb->flags & SCB_M_QUEUED) {
 		/* mbuf still alive */
 		scb->save_mbuf_destructor = m->destructor;
-		ND("queueing m %p (type 0x%x)", m, ntohs(*(uint16_t *)(m->head + 14)));
+		ND("queueing m %p (type 0x%x) m->sk %p", m, ntohs(*(uint16_t *)(m->head + 14)), m->sk);
 		m->destructor = stackmap_mbuf_destructor;
 		if (stackmap_extra_enqueue(na, slot)) {
-			D("no more space for m %p data %p", m, m->head);
+			ND("no more space for m %p data %p", m, m->head);
 			slot->flags |= NS_STUCK;
 			return -EBUSY;
 		}

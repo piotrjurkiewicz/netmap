@@ -1694,7 +1694,7 @@ sender_body(void *data)
 			}
 			m = send_packets(txring, pkt, frame, size, targ->g,
 					 limit, options, frags);
-			ND("limit %d tail %d frags %d m %d",
+			ND("limit %lu tail %d frags %d m %d",
 				limit, txring->tail, frags, m);
 			sent += m;
 			if (m > 0) //XXX-ste: can m be 0?
@@ -1713,10 +1713,11 @@ sender_body(void *data)
 	D("flush tail %d head %d on thread %p",
 		txring->tail, txring->head,
 		(void *)pthread_self());
-	if (pfd.events & POLLIN)
-		poll(&pfd, 1, 1000); /* for stack */
-	else
-		ioctl(pfd.fd, NIOCTXSYNC, NULL);
+	if (pfd.events & POLLIN) { /* for stack */
+		for (i = 1; i >= 0; i--)
+			poll(&pfd, 1, i*1000); // XXX just heuristic
+	}
+	ioctl(pfd.fd, NIOCTXSYNC, NULL);
 
 	/* final part: wait all the TX queues to be empty. */
 	for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
@@ -3054,6 +3055,14 @@ main(int arc, char **argv)
 		sin->sin_port = htons(g.dst_ip.port0);
 		sin->sin_addr.s_addr = htonl(g.dst_ip.ipv4.start);
 		g.nmsg.nmsg_namelen = sizeof(*sin);
+
+		/* Kill following lines to test non-connec()ed case */
+		if (connect(sfd, (struct sockaddr *)sin, sizeof(*sin))) {
+			perror("connect");
+			close(sfd);
+			goto out;
+		}
+		g.nmsg.nmsg_namelen = 0;
 	}
 
 	g.main_fd = g.nmd->fd;

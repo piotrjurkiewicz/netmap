@@ -101,22 +101,18 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 	    kring <= NMR(na, NR_TX) + na->num_tx_rings) {
 		t = NR_TX;
 	}
-	ND("%s interrupt (kring %p)", t == NR_TX ? "tx" : "rx", kring);
 
 	/* just wakeup the client on the master */
 	mna = stackmap_master(vpna);
+	ND("%s interrupt (kring %p)", t == NR_TX ? "tx" : "rx", kring);
 	if (mna) {
 		struct netmap_kring *mkring;
 		u_int me = kring - NMR(na, t), mnr;
 
-		if (stackmap_mode != NM_STACKMAP_PULL) {
-			D("calling bwrap_intr_notify");
+		if (stackmap_mode != NM_STACKMAP_PULL)
 			return netmap_bwrap_intr_notify(kring, flags);
-		}
 		mnr = t == NR_RX ? mna->num_rx_rings : mna->num_tx_rings;
 		mkring = &NMR(mna, t)[mnr > me ? me : 0];
-		KASSERT(mkring->nm_notify, "nm_notify is null at mna");
-		ND("waking up master %s", mna->name);
 		mkring->nm_notify(mkring, 0);
 	}
 	return NM_IRQ_COMPLETED;
@@ -156,6 +152,7 @@ stackmap_mbuf_destructor(struct mbuf *m)
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_cb *scb = STACKMAP_CB(m);
 
+	ND("m %p sk %p", m, m->sk);
 	KASSERT(m->sk, "m->sk is NULL!");
 	ska = stackmap_sk(m->sk);
 	if (ska) {
@@ -172,7 +169,7 @@ stackmap_mbuf_destructor(struct mbuf *m)
 			("wird flags 0x%x", scb->flags));
 	scb->flags &= ~SCB_M_QUEUED; // netmap-originated skb
 
-	D("m %p %s", m, ska ?  "unlinked from extra"
+	ND("m %p %s", m, ska ?  "unlinked from extra"
 	       	: "socket has already been unregistered");
 }
 
@@ -406,11 +403,20 @@ static int stackmap_bdg_flush(struct netmap_kring *kring)
 		scb->kring = kring;
 		scb->slot = slot;
 
+		/* Here we have options:
+		 * 1.) Skip this particular packet as if consumed - continue
+		 * 2.) Block at this position - break
+		 * On TX, wrongly-destined packets (on non-connected sockets)
+		 * can be 1, but queued packets (e.g., by ARP) must block
+		 * subsequent packets.
+		 */
 		if (rx) {
 			nm_os_stackmap_mbuf_recv(m);
 		} else {
-			if (nm_os_stackmap_mbuf_send(m))
+			if (nm_os_stackmap_mbuf_send(m)) {
+				ND("early break");
 				break;
+			}
 			/* know we know packet has been queued
 			 * to one socket */
 		}
@@ -558,26 +564,6 @@ unlock_out:
 //	return 0;
 }
 
-static int
-stackmap_txsync(struct netmap_kring *kring, int flags)
-{
-	struct netmap_adapter *na = kring->na;
-	u_int const head = kring->rhead;
-	u_int done;
-
-	if (!((struct netmap_vp_adapter *)na)->na_bdg) {
-		done = head;
-		return 0;
-	}
-	done = stackmap_bdg_flush(kring);
-	/* debug to drain everything */
-	//kring->nr_hwcur = head;
-	kring->nr_hwcur = done;
-	//kring->nr_hwtail = nm_prev(head, kring->nkr_num_slots - 1);
-	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
-	return 0;
-}
-
 /* rxsync for stackport */
 static int
 stackmap_rxsync(struct netmap_kring *kring, int flags)
@@ -612,6 +598,26 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 	return netmap_vp_rxsync(kring, flags);
 }
 
+static int
+stackmap_txsync(struct netmap_kring *kring, int flags)
+{
+	struct netmap_adapter *na = kring->na;
+	u_int const head = kring->rhead;
+	u_int done;
+
+	if (!((struct netmap_vp_adapter *)na)->na_bdg) {
+		done = head;
+		return 0;
+	}
+	done = stackmap_bdg_flush(kring);
+	/* debug to drain everything */
+	//kring->nr_hwcur = head;
+	kring->nr_hwcur = done;
+	//kring->nr_hwtail = nm_prev(head, kring->nkr_num_slots - 1);
+	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
+	return 0;
+}
+
 int
 stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 {
@@ -628,7 +634,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	} else if (m->destructor == stackmap_mbuf_destructor) {
 	       	/* originated by the stack but has been queued
 		 * it might be from a slot */
-		D("queued transmit m %p (type 0x%x)",
+		ND("queued transmit m %p (type 0x%x)",
 		    m, ntohs(*(uint16_t *)(m->head + 14)));
 		netmap_transmit(ifp, m);
 		return 0;
