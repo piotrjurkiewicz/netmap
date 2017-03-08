@@ -1072,6 +1072,14 @@ Other
 .Nm
 clients attached to the same switch can now communicate
 with the network card or the host.
+.Ss STACKMAP
+A simple way to test Stackmap of a
+.Nm STACKMAP
+is to use a UDP sender,
+e.g. running the following in a terminal:
+.Dl pkt-gen -i stack:0+eth1 -f tx -s 10.0.0.3:60000 -d 10.0.0.2:50000
+where the host has 10.0.0.3 on eth1 and a route to 10.0.0.2 exists
+in the network stack
 .Sh SEE ALSO
 .Pa http://info.iet.unipi.it/~luigi/netmap/
 .Pp
