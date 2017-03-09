@@ -516,11 +516,22 @@ void netmap_bns_unregister(void);
 #define NM_SOCK_LOCK(_s)	lock_sock(_s)
 #define NM_SOCK_UNLOCK(_s)	release_sock(_s)
 
-#define STACKMAP_CB(_m)	((struct stackmap_cb *) \
-	((uint8_t *)skb_shinfo((_m)) - sizeof(struct stackmap_cb)))
-#define STACKMAP_CB_BUF(_buf, _bufsiz) ((struct stackmap_cb *) 		\
-	((uint8_t *)(_buf) + (_bufsiz) - sizeof(struct skb_shared_info) \
-	 - sizeof(struct stackmap_cb)))
+/* XXX */
+/*
+ * Only valid if scb has been populated by nm_os_build_mbuf()
+ */
+#define STACKMAP_CB(_m) ((struct stackmap_cb *) \
+	(((void *)skb_shinfo((_m))) + \
+	SKB_DATA_ALIGN(sizeof(struct skb_shared_info))))
+
+#define STACKMAP_CB_NMB(_buf, _bufsiz) ((struct stackmap_cb *) 		\
+	((void *)(_buf) + ((_bufsiz) - sizeof(struct stackmap_cb))))
+
+#define STACKMAP_CB_FRAG(_m, _bufsiz) \
+	STACKMAP_CB_NMB(page_address(\
+		skb_frag_page(&skb_shinfo((_m))->frags[0])) + \
+		_bufsiz * (skb_shinfo((_m))->frags[0].page_offset / _bufsiz),\
+		_bufsiz)
 
 static inline struct stackmap_sk_adapter *
 stackmap_sk(NM_SOCK_T *sk)

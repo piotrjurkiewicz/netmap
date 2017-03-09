@@ -1086,12 +1086,25 @@ struct stackmap_cb {
 	struct netmap_kring *kring; // to reach scratchpad
 	struct netmap_slot *slot; // might not linked to any ring
 	void (*save_mbuf_destructor)(struct mbuf *m);
-#define SCB_M_ORIGIN	0x01
-#define SCB_M_TRANSMIT	0x02
-#define SCB_M_QUEUED	0x04
-	uint8_t flags;
-	/* 7 byte hole for 8 byte alignment */
-}__attribute__((__packed__)); // 25 byte so far
+#define SCB_M_MAGIC		0x12345600	/* XXX do better */
+#define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
+#define SCB_M_SENDPAGE	0x00000001
+#define SCB_M_TRANSMIT	0x00000002
+#define SCB_M_QUEUED	0x00000004
+	uint32_t flags;
+}__attribute__((__packed__)); // 28 byte so far
+
+static inline void
+stackmap_cb_set_state(struct stackmap_cb *scb, u_int newstate)
+{
+	scb->flags = (SCB_M_MAGIC | newstate);
+}
+
+static inline int
+stackmap_cb_valid(struct stackmap_cb *scb)
+{
+	return (scb->flags & SCB_M_MAGIC);
+}
 
 int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
 netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
@@ -2026,9 +2039,8 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #ifdef WITH_STACK
 struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
 void nm_os_stackmap_mbuf_recv(struct mbuf *);
-int nm_os_stackmap_mbuf_send(struct mbuf *);
+int nm_os_stackmap_sendpage(struct netmap_adapter *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
-void stackmap_mbuf_destructor(struct mbuf *);
 /* TODO: avoid linear search... */
 static inline int
 stackmap_extra_enqueue(struct netmap_adapter *na,
@@ -2045,7 +2057,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 
 		if (extra->len) /* in use */
 			continue;
-		scb = STACKMAP_CB_BUF(NMB(na, slot),
+		scb = STACKMAP_CB_NMB(NMB(na, slot),
 				NETMAP_BUF_SIZE(na));
 		scb->kring = NULL;
 		scb->slot = extra;

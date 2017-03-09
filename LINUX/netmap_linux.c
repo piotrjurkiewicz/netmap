@@ -867,7 +867,7 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	struct mbuf *m;
 	struct page *page;
 
-	m = build_skb(buf, NETMAP_BUF_SIZE(na));
+	m = build_skb(buf, NETMAP_BUF_SIZE(na) - sizeof(struct stackmap_cb));
 	if (!m)
 		return NULL;
 	page = virt_to_page(buf);
@@ -1140,10 +1140,64 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
 	if (ntohs(m->protocol) == 0x0806)
-		D("receiving ARP");
+		D("ARP");
 	netif_receive_skb(m);
 }
 
+int
+nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
+{
+	struct stackmap_sk_adapter *ska;
+	struct stackmap_cb *scb;
+	struct page *page;
+	u_int poff, len;
+	NM_SOCK_T *sk;
+	void *nmb = NMB(na, slot);
+	int err;
+
+	ska = stackmap_ska_from_fd(na, slot->fd);
+	if (!ska) {
+		D("no ska for fd %d (na %s)", slot->fd, na->name);
+		return 0;
+	}
+	sk = ska->sk;
+
+	page = virt_to_page(nmb);
+	get_page(page); // survive __kfree_skb()
+	poff = nmb - page_to_virt(page) + na->virt_hdr_len + slot->offset;
+	len = slot->len - na->virt_hdr_len - slot->offset;
+	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
+	stackmap_cb_set_state(scb, SCB_M_SENDPAGE);
+	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u", (int)(slot - scb->kring->ring->slot), sk, ska->fd, nmb, scb, scb->flags, poff);
+
+	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
+	if (err < 0) {
+		/* XXX treat as if consumed and hope mbuf has been freed */
+		D("error %d in sendpage() slot %d", err, slot - scb->kring->ring->slot);
+		//scb->flags = 0;
+		bzero(scb, sizeof(*scb));
+	}
+
+	/*
+	 * Here we have two conditions:
+	 * 1. Packet has gone down to the NIC. SCB_M_QUEUED flag has been
+	 *    removed by stackmap_ndo_start_xmit().
+	 *    AlSO mbuf destructor has been set to ours.
+	 * 2. Packet has NOT arrived at the NIC due to the need for ARP etc.,
+	 *    so the stack owns a reference. SCB_M_QUEUED remains and 
+	 *    destructor has not been replaced.
+	 */
+	if (scb->flags & SCB_M_SENDPAGE) {
+		stackmap_cb_set_state(scb, SCB_M_QUEUED);
+		if (stackmap_extra_enqueue(na, slot)) {
+			D("no extra space for nmb %p slot %p", nmb, scb->slot);
+			return -EBUSY;
+		}
+	}
+	return 0;
+}
+
+#if 0
 int
 nm_os_stackmap_mbuf_send(struct mbuf *m)
 {
@@ -1200,6 +1254,7 @@ nm_os_stackmap_mbuf_send(struct mbuf *m)
 	}
 	return 0;
 }
+#endif /* 0 */
 #endif /* WITH_STACK */
 
 /* Use ethtool to find the current NIC rings lengths, so that the netmap
