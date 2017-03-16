@@ -227,7 +227,7 @@ struct netmap_slot {
 	 * The 'len' field refers to the individual fragment.
 	 */
 
-#define NS_STUCK	0x0040	/* the slot throttles the ring */
+#define NS_BUSY		0x0040	/* the slot throttles the ring */
 #define NS_RELEASED	0x0080	/* stuck has been released */
 #define	NS_PORT_SHIFT	8
 #define	NS_PORT_MASK	(0xff << NS_PORT_SHIFT)

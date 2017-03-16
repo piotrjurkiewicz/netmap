@@ -801,6 +801,22 @@ u_int nm_os_hw_headroom(struct ifnet *ifp)
 	return LL_RESERVED_SPACE(ifp) - ifp->hard_header_len;
 }
 
+/* Releases stack's reference to data 
+ * Releasing the slot is not my job */
+void
+nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
+	bool zerocopy_success)
+{
+	struct stackmap_cb *scb;
+	struct nm_os_ubuf_info *u = (struct nm_os_ubuf_info *)uarg;
+
+	scb = container_of(u, struct stackmap_cb, ui);
+	if (!(scb->slot->flags & NS_BUSY))
+		D("funny, called on non NS_BUSY slot");
+	scb->slot->flags &= ~NS_BUSY;
+	ND("scb %p", scb);
+}
+
 void
 nm_os_stackmap_restore_data_ready(NM_SOCK_T *sk,
 				  struct stackmap_sk_adapter *ska)
@@ -1168,93 +1184,41 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_SENDPAGE);
-	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u", (int)(slot - scb->kring->ring->slot), sk, ska->fd, nmb, scb, scb->flags, poff);
+	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
+		(int)(slot - scb->kring->ring->slot), sk,
+		ska->fd, nmb, scb, scb->flags, poff);
 
+	/* let the stack to manage the buffer */
+	slot->flags |= NS_BUSY;
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
 	if (err < 0) {
-		/* XXX treat as if consumed and hope mbuf has been freed */
-		D("error %d in sendpage() slot %d", err, slot - scb->kring->ring->slot);
-		//scb->flags = 0;
+		/* Treat as if this buffer is consumed and hope mbuf
+		 * has been freed.
+		 * mbuf hasn't reached ndo_start_xmit() that sets ubuf 
+		 * destructor. So we clear NS_BUSY here. Duplicate clear
+		 * isn't a problem.
+		 */
+		D("error %d in sendpage() slot %d",
+				err, slot - scb->kring->ring->slot);
 		bzero(scb, sizeof(*scb));
+		if (slot->flags & NS_BUSY)
+			D("Weird, NS_BUSY on sendpage() error. Clear anyways");
+		slot->flags &= ~NS_BUSY;
 	}
 
-	/*
-	 * Here we have two conditions:
-	 * 1. Packet has gone down to the NIC. SCB_M_QUEUED flag has been
-	 *    removed by stackmap_ndo_start_xmit().
-	 *    AlSO mbuf destructor has been set to ours.
-	 * 2. Packet has NOT arrived at the NIC due to the need for ARP etc.,
-	 *    so the stack owns a reference. SCB_M_QUEUED remains and 
-	 *    destructor has not been replaced.
-	 */
-	if (scb->flags & SCB_M_SENDPAGE) {
+	/* Didn't reach ndo_start_xmit() */
+	if (stackmap_cb_get_state(scb) == SCB_M_SENDPAGE) {
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
+		/* NS_BUSY is also transferred */
 		if (stackmap_extra_enqueue(na, slot)) {
-			D("no extra space for nmb %p slot %p", nmb, scb->slot);
+			ND("no extra space for nmb %p slot %p scb %p", nmb, scb->slot, scb);
 			return -EBUSY;
 		}
+		D("enqueued nmb %p to now this slot is at %p scb %p", nmb, scb->slot, scb);
 	}
 	return 0;
 }
 
-#if 0
-int
-nm_os_stackmap_mbuf_send(struct mbuf *m)
-{
-	struct stackmap_cb *scb = STACKMAP_CB(m);
-	struct netmap_slot *slot = scb->slot;
-	struct netmap_adapter *na = scb->kring->na;
-	int fd = slot->fd;
-	struct stackmap_sk_adapter *ska;
-	NM_SOCK_T *sk;
-	u_int headroom = na->virt_hdr_len + slot->offset;
-	int error = 0;
-
-	ska = stackmap_ska_from_fd(na, fd);
-	if (!ska) {
-		D("no ska for fd %d", slot->fd);
-		return 0;
-	}
-	ND("ska found sk %p fd %d m %p m->sk %p", ska->sk, ska->fd, m, m->sk);
-	sk = ska->sk;
-
-	/* checksum */
-	m->csum = nm_os_csum_raw(NMB(na, slot) + 
-			headroom, slot->len - headroom, 0);
-
-	if (sk->sk_protocol == IPPROTO_UDP) {
-		/* set mbuf data to point to user data */
-		skb_pull_inline(m, slot->offset);
-		skb_set_owner_w(m, sk);
-		scb->flags |= SCB_M_QUEUED;
-		m->wifi_acked_valid = 1;
-
-		error = stackmap_udp_sendmsg(m);
-		if (error < 0) {
-			scb->flags &= ~SCB_M_QUEUED;
-			m_freem(m);
-		}
-		/* m has been freed on success (scb still valid) */
-	} else {
-		D("no supported protocol %d", sk->sk_protocol);
-		return 0;
-	}
-	if (scb->flags & SCB_M_QUEUED) {
-		/* mbuf still alive */
-		scb->save_mbuf_destructor = m->destructor;
-		ND("queueing m %p (type 0x%x) m->sk %p", m, ntohs(*(uint16_t *)(m->head + 14)), m->sk);
-		m->destructor = stackmap_mbuf_destructor;
-		if (stackmap_extra_enqueue(na, slot)) {
-			ND("no more space for m %p data %p", m, m->head);
-			slot->flags |= NS_STUCK;
-			return -EBUSY;
-		}
-	} else {
-		ND("direct transmit m %p (type 0x%x)", m, ntohs(*(uint16_t *)(m->head + 14)));
-	}
-	return 0;
-}
-#endif /* 0 */
 #endif /* WITH_STACK */
 
 /* Use ethtool to find the current NIC rings lengths, so that the netmap

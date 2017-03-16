@@ -533,6 +533,19 @@ void netmap_bns_unregister(void);
 		_bufsiz * (skb_shinfo((_m))->frags[0].page_offset / _bufsiz),\
 		_bufsiz)
 
+struct nm_ubuf_info {
+	struct ubuf_info ubuf;
+};
+
+static inline void
+nm_set_mbuf_data_destructor(struct mbuf *m,
+	struct nm_ubuf_info *ui, void *cb)
+{
+	ui->ubuf.callback = cb;
+	skb_shinfo(m)->destructor_arg = ui;
+	skb_shinfo(m)->tx_flags |= SKBTX_DEV_ZEROCOPY;
+}
+
 static inline struct stackmap_sk_adapter *
 stackmap_sk(NM_SOCK_T *sk)
 {

@@ -132,49 +132,6 @@ enum {
 	NM_STACK_CONSUMED_RESERVING,
 };
 
-
-/* also fine for non extra slots */
-static inline void
-stackmap_extra_dequeue(struct netmap_slot *slot)
-{
-	slot->len = slot->offset = slot->next = 0;
-	slot->fd = 0;
-	if (slot->flags & NS_STUCK) {
-		//D("stuck solved");
-		slot->flags &= ~NS_STUCK;
-		slot->flags |= NS_RELEASED;
-	}
-}
-
-#if 0
-void
-stackmap_mbuf_destructor(struct mbuf *m)
-{
-	struct stackmap_sk_adapter *ska;
-	struct stackmap_cb *scb = STACKMAP_CB(m);
-
-	ND("m %p sk %p", m, m->sk);
-	KASSERT(m->sk, "m->sk is NULL!");
-	ska = stackmap_sk(m->sk);
-	if (ska) {
-		int was_stuck = (scb->slot->flags & NS_STUCK);
-		stackmap_extra_dequeue(scb->slot);
-		if (was_stuck)
-			D("m %p buf %p stuck solved", m, m->head);
-	}
-	if ((m->destructor = scb->save_mbuf_destructor) != NULL) {
-		m->destructor(m);
-		scb->save_mbuf_destructor = NULL;
-	}
-	KASSERT(!(scb->flags & (SCB_M_ORIGIN | SCB_M_TRANSMIT)),
-			("wird flags 0x%x", scb->flags));
-	scb->flags &= ~SCB_M_QUEUED; // netmap-originated skb
-
-	ND("m %p %s", m, ska ?  "unlinked from extra"
-	       	: "socket has already been unregistered");
-}
-#endif /* 0 */
-
 #define STACKMAP_FD_HOST	(NM_BDG_MAXPORTS*NM_BDG_MAXRINGS-1)
 
 /* TX:
@@ -367,20 +324,20 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 
 		/* Already processed by but stays here due to stuck */
-		scb = STACKMAP_CB_NMB(nmb, nmbsiz);
-		if (stackmap_cb_valid(scb)) {
-			KASSERT(!rx, "rx");
-			if (scb->flags & SCB_M_TRANSMIT) {
-				/* This packet has been dropped */
-				ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x", rx ? "rx" : "tx", j, nmb, scb->flags, ntohs(*(uint16_t *)(nmb+14)));
-				bzero(scb, sizeof(*scb));
-				k = nm_next(k, lim_tx);
-				continue;
-			}
-			if (stackmap_extra_enqueue(na, slot)) {
-				/* still stuck */
+		if (slot->flags & NS_BUSY) {
+			/* stack has reference(s) */
+			if (stackmap_extra_enqueue(na,slot))
 				break;
-			}
+			k = nm_next(k, lim_tx);
+			continue;
+		}
+		scb = STACKMAP_CB_NMB(nmb, nmbsiz);
+		if (stackmap_cb_get_state(scb) == SCB_M_TRANSMIT) {
+			/* This packet has been dropped */
+			ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x",
+				rx ? "rx" : "tx", j, nmb, scb->flags,
+				ntohs(*(uint16_t *)(nmb+14)));
+			bzero(scb, sizeof(*scb));
 			k = nm_next(k, lim_tx);
 			continue;
 		}
@@ -485,18 +442,21 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			ts = scb->slot;
 			bzero(scb, sizeof(*scb));
 
+
 			/* ts already includes fd */
-			rs = &rxkring->ring->slot[j]; {
-				rs->len = 0; /* XXX */
-			}
+			rs = &rxkring->ring->slot[j]; 
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
-			if (rs->buf_idx == 0)
-				D("buf_idx 0 at %d", j);
+
+			/* OK to reuse */
+			ts->len = ts->offset = ts->next = 0;
+			ts->fd = 0;
+
 			ts->flags |= NS_BUF_CHANGED;
 			rs->flags |= NS_BUF_CHANGED;
 			j = nm_next(j, lim_rx);
+
 		} while (--howmany && next != NM_FT_NULL);
 		{
 		    /* current position */
@@ -627,29 +587,6 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	return 0;
 }
 
-static int
-test_copy(const struct sk_buff *skb, int offset, void *to, int len)
-{
-	int start = skb_headlen(skb);
-	struct sk_buff *frag_iter;
-	int i, copy;
-
-	if (offset > (int)skb->len - len)
-		return 0;
-	/* Copy header. */
-	if ((copy = start - offset) > 0) {
-		if (copy > len)
-			copy = len;
-		skb_copy_from_linear_data_offset(skb, offset, to, copy);
-		if ((len -= copy) == 0)
-			return 0;
-		offset += copy;
-		to     += copy;
-	}
-	D("offset %u remaining %u", offset, len);
-	return 0;
-}
-
 int
 stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 {
@@ -678,7 +615,6 @@ transmit:
 
 	/* Possibly from sendpage() context */
 	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
-	ND("scb %p flag 0x%08x", scb, scb->flags);
 	if (unlikely(!stackmap_cb_valid(scb))) {
 		D("m is nonlinear but not from our sendpage()");
 		goto transmit;
@@ -687,17 +623,22 @@ transmit:
 	/* because of valid scb, this is our packet. */
 
 	slot = scb->slot;
-	if (scb->flags & SCB_M_QUEUED) {
+	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 	       	/* originated by netmap but has been queued on 
 		 * either extra or txring slot.
 		 * For the latter we must avoid performing sendpage again.
 		 * The backend might drop this packet
 		 */
+		D("queued transmit scb %p", scb);
+		nm_set_mbuf_data_destructor(m, &scb->ui,
+			nm_os_stackmap_mbuf_data_destructor);
 		slot->len = slot->offset = slot->next = 0;
 		bzero(scb, sizeof(*scb));
-		goto transmit;
+		netmap_transmit(ifp, m);
+		return 0;
 	}
 
+	KASSERT(stackmap_cb_get_state(scb) == SCB_M_SENDPAGE, "invalid state");
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
 	ND("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
@@ -721,8 +662,16 @@ transmit:
 	}
 
 	stackmap_add_fdtable(scb, NMB(na, slot));
+
+	/* We don't know when the stack actually releases the data
+	 * or it might holds reference via clone
+	 */
+	nm_set_mbuf_data_destructor(m, &scb->ui,
+			nm_os_stackmap_mbuf_data_destructor);
+
 	m_freem(m);
 	stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
+	ND("nmb %p sent", NMB(na, slot));
 	return 0;
 }
 

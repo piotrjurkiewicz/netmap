@@ -1085,13 +1085,13 @@ struct stackmap_adapter {
 struct stackmap_cb {
 	struct netmap_kring *kring; // to reach scratchpad
 	struct netmap_slot *slot; // might not linked to any ring
-	void (*save_mbuf_destructor)(struct mbuf *m);
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
 #define SCB_M_SENDPAGE	0x00000001
 #define SCB_M_TRANSMIT	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
+	struct nm_ubuf_info ui;
 }__attribute__((__packed__)); // 28 byte so far
 
 static inline void
@@ -1106,6 +1106,12 @@ stackmap_cb_valid(struct stackmap_cb *scb)
 	return (scb->flags & SCB_M_MAGIC);
 }
 
+static inline int
+stackmap_cb_get_state(struct stackmap_cb *scb)
+{
+	return stackmap_cb_valid(scb) ? (scb->flags & ~SCB_M_MAGIC_MASK) : 0;
+}
+
 int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
 netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
 void nm_os_stackmap_data_ready(NM_SOCK_T *);
@@ -1113,6 +1119,7 @@ u_int nm_os_hw_headroom(struct ifnet *ifp);
 void stackmap_add_fdtable(struct stackmap_cb *, char *);
 NM_SOCK_T *nm_os_sock_fget(int);
 void nm_os_sock_fput(NM_SOCK_T *);
+void nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *, bool);
 #endif /* WITH_STACK */
 
 
@@ -2062,15 +2069,14 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		scb->kring = NULL;
 		scb->slot = extra;
 
-		slot->flags &= ~NS_STUCK;
-
 		tmp = *extra;
 		*extra = *slot;
 		/* no need for NS_BUF_CHANGED on extra slot */
-		KASSERT(slot->buf_idx != 0,
-		    "source slot has buf_idx 0");
-		KASSERT(tmp.buf_idx != 0,
-		    "extra slot has buf_idx 0");
+		if (!slot->buf_idx && !tmp.buf_idx) {
+			D("slot->buf_idx %d tmp.buf_idx %d",
+				slot->buf_idx, tmp.buf_idx);
+			panic("xxx");
+		}
 		slot->buf_idx = tmp.buf_idx;
 		slot->flags |= NS_BUF_CHANGED;
 		slot->len = slot->offset = slot->next = 0;
