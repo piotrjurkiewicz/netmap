@@ -653,12 +653,10 @@ transmit:
 		//skb_copy_bits(m, 0, NMB(na, slot)+2, skb_headlen(m));
 		//test_copy(m, 0, skb_headlen(m), NMB(na, slot)+2);
 		ND("copied type 0x%04x (skb_headlen %d slot->offset %d)", ntohs(*(uint16_t *)(NMB(na, slot) + 14)), skb_headlen(m), slot->offset);
-		
 	} else {
 		/* WRONG */
 		skb_copy_from_linear_data_offset(m, 0, NMB(na, slot) + 2,
 			       	slot->offset);
-
 	}
 
 	stackmap_add_fdtable(scb, NMB(na, slot));
@@ -666,10 +664,17 @@ transmit:
 	/* We don't know when the stack actually releases the data
 	 * or it might holds reference via clone
 	 */
-	nm_set_mbuf_data_destructor(m, &scb->ui,
-			nm_os_stackmap_mbuf_data_destructor);
 
+	struct mbuf *clone;
+	clone = skb_clone(m, GFP_ATOMIC);
+	//nm_set_mbuf_data_destructor(m, &scb->ui,
+	//		nm_os_stackmap_mbuf_data_destructor);
+	nm_set_mbuf_data_destructor(clone, &scb->ui,
+			nm_os_stackmap_mbuf_data_destructor);
+	kfree_skb(clone); // emulate clone is released first
+	D("clone is released");
 	m_freem(m);
+	D("orig is released");
 	stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
 	ND("nmb %p sent", NMB(na, slot));
 	return 0;
