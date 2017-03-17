@@ -307,6 +307,7 @@ struct glob_arg {
 	char stack_ifname[MAX_IFNAMELEN];
 	int sfd;
 	int soff;
+	int transport;
 	struct nm_msghdr nmsg;
 };
 enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP, DEV_UDPSOCK };
@@ -2708,9 +2709,10 @@ main(int arc, char **argv)
 	g.virt_header = 0;
 	g.wait_link = 2;
 	g.soff = 0;
+	g.transport = IPPROTO_UDP;
 
 	while ((ch = getopt(arc, argv, "46a:f:F:n:i:Il:d:s:D:S:b:c:o:p:"
-	    "T:w:WvR:XC:H:e:E:m:rP:zZA")) != -1) {
+	    "T:w:WvR:XC:H:e:E:m:rP:zZAt:")) != -1) {
 
 		switch(ch) {
 		default:
@@ -2882,6 +2884,12 @@ main(int arc, char **argv)
 		case 'A':
 			g.options |= OPT_PPS_STATS;
 			break;
+		case 't':
+			if (!strncmp(optarg, "tcp", 3))
+				g.transport = IPPROTO_TCP;
+			else if (!strncmp(optarg, "udp", 3))
+				g.transport = IPPROTO_UDP;
+			break;
 		}
 	}
 
@@ -3018,7 +3026,10 @@ main(int arc, char **argv)
 		int on = 1;
 		char *p;
 
-		sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (g.transport == IPPROTO_UDP)
+			sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		else if (g.transport == IPPROTO_TCP)
+			sfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		if (!sfd) {
 			perror("socket");
 			goto out;
