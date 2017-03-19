@@ -808,7 +808,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	bool zerocopy_success)
 {
 	struct stackmap_cb *scb;
-	struct nm_os_ubuf_info *u = (struct nm_os_ubuf_info *)uarg;
+	struct nm_ubuf_info *u = (struct nm_ubuf_info *)uarg;
 
 	scb = container_of(u, struct stackmap_cb, ui);
 	if (!(scb->slot->flags & NS_BUSY))

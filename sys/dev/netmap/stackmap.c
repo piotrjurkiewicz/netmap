@@ -60,7 +60,8 @@
 #ifdef WITH_STACK
 #define NM_STACKMAP_PULL 1
 //#define STACKMAP_COPY 1
-static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
+//static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
+static int stackmap_mode = 0;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_mode, CTLFLAG_RW, &stackmap_mode, 0 , "");
@@ -288,6 +289,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
+		D("rx");
 	}
 
 	/* examine all the slots */
@@ -315,9 +317,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb->kring = kring;
 			//scb->save_mbuf_destructor = NULL; // why?
 			//scb->flags = 0; // why clear?
-			ND("host: adding buf %p off %d len %d type 0x%04x",
+			D("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
-				ntohs(*(uint16_t *)(nmb+14)));
+				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
 			k = nm_next(k, lim_tx);
 			continue;
@@ -596,7 +598,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	ND("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
+	D("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
 		m, m->head, skb_headlen(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,

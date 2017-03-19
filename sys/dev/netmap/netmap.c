@@ -1279,9 +1279,9 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 			int len = MBUF_LEN(m);
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
-			//uint16_t t;
-			//t = ntohs(*(uint16_t *)(m->data + 12));
-			//D("head %p data %p to %p type 0x%x", m->head, m->data, NMB(na, slot) + 2, t);
+			uint16_t t;
+			t = ntohs(*(uint16_t *)(m->data + 12));
+			ND("head %p data %p to %p type 0x%x", m->head, m->data, NMB(na, slot) + 2, t);
 			m_copydata(m, 0, len, NMB(na, slot) + 2);
 			ND("nm %d len %d", nm_i, len);
 			if (netmap_verbose)
@@ -3135,6 +3135,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	unsigned int txr;
 	struct mbq *q;
 	int busy;
+	uint8_t *buf;
 
 	kring = &na->rx_rings[na->num_rx_rings];
 	// XXX [Linux] we do not need this lock
@@ -3147,6 +3148,10 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		goto done;
 	}
 
+	buf = m->data;
+	ND("buf %p len %d type 0x%04x proto %u",
+		buf, m->len,
+		ntohs(*(uint16_t *)(buf+12)), ((struct nm_iphdr *)(buf+14))->protocol);
 	txr = MBUF_TXQ(m);
 	if (txr >= na->num_tx_rings) {
 		txr %= na->num_tx_rings;
