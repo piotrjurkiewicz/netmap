@@ -60,8 +60,8 @@
 #ifdef WITH_STACK
 #define NM_STACKMAP_PULL 1
 //#define STACKMAP_COPY 1
-//static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
-static int stackmap_mode = 0;
+static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
+//static int stackmap_mode = 0;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_mode, CTLFLAG_RW, &stackmap_mode, 0 , "");
@@ -598,7 +598,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	D("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
+	ND("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
 		m, m->head, skb_headlen(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
@@ -643,7 +643,7 @@ transmit:
 	KASSERT(stackmap_cb_get_state(scb) == SCB_M_SENDPAGE, "invalid state");
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	ND("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	D("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */
@@ -656,9 +656,7 @@ transmit:
 		//test_copy(m, 0, skb_headlen(m), NMB(na, slot)+2);
 		ND("copied type 0x%04x (skb_headlen %d slot->offset %d)", ntohs(*(uint16_t *)(NMB(na, slot) + 14)), skb_headlen(m), slot->offset);
 	} else {
-		/* WRONG */
-		skb_copy_from_linear_data_offset(m, 0, NMB(na, slot) + 2,
-			       	slot->offset);
+		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + 2);
 	}
 
 	stackmap_add_fdtable(scb, NMB(na, slot));
@@ -667,16 +665,16 @@ transmit:
 	 * or it might holds reference via clone
 	 */
 
-	struct mbuf *clone;
-	clone = skb_clone(m, GFP_ATOMIC);
-	//nm_set_mbuf_data_destructor(m, &scb->ui,
-	//		nm_os_stackmap_mbuf_data_destructor);
-	nm_set_mbuf_data_destructor(clone, &scb->ui,
+	//struct mbuf *clone;
+	//clone = skb_clone(m, GFP_ATOMIC);
+	nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
-	kfree_skb(clone); // emulate clone is released first
-	D("clone is released");
+	//nm_set_mbuf_data_destructor(clone, &scb->ui,
+	//		nm_os_stackmap_mbuf_data_destructor);
+	//kfree_skb(clone); // emulate clone is released first
+	ND("clone is released");
 	m_freem(m);
-	D("orig is released");
+	ND("orig is released");
 	stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
 	ND("nmb %p sent", NMB(na, slot));
 	return 0;

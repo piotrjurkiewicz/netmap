@@ -1490,7 +1490,7 @@ static void *
 sender_body(void *data)
 {
 	struct targ *targ = (struct targ *) data;
-	struct pollfd pfd = { .fd = targ->fd, .events = POLLOUT };
+	struct pollfd pfd[2] = {{ .fd = targ->fd, .events = POLLOUT }};
 	struct netmap_if *nifp;
 	struct netmap_ring *txring = NULL;
 	int i;
@@ -1514,8 +1514,11 @@ sender_body(void *data)
 	}
 	if (targ->g->dev_type == DEV_NETMAP &&
 	    !strncmp(targ->g->ifname, "stack", 5)) {
-		pfd.events |= POLLIN; /* for ARP exchange on PULL mode */
-		targ->g->soff = 14+20+8;
+		pfd[0].events |= POLLIN; /* for ARP exchange on PULL mode */
+		if (targ->g->transport == IPPROTO_TCP)
+			targ->g->soff = 14+20+20;
+		else /* UDP */
+			targ->g->soff = 14+20+8;
 	}
 
 	D("start, fd %d main_fd %d", targ->fd, targ->g->main_fd);
@@ -1639,6 +1642,21 @@ sender_body(void *data)
 	int frags = targ->g->frags;
 
 	nifp = targ->nmd->nifp;
+	if (targ->g->sfd) {
+		int on = 1, err;
+		int cfd = targ->g->sfd;
+	       
+		pfd[1].fd = cfd;
+		pfd[1].events |= POLLOUT;
+		ioctl(cfd, FIONBIO, &on);
+		err = connect(cfd, (struct sockaddr *)targ->g->nmsg.nmsg_name,
+				targ->g->nmsg.nmsg_namelen);
+		if (err && errno != EINPROGRESS) {
+			perror("connect");
+			close(cfd);
+			goto quit;
+		}
+	}
 	while (!targ->cancel && (n == 0 || sent < n)) {
 
 		if (rate_limit && tosend <= 0) {
@@ -1651,25 +1669,29 @@ sender_body(void *data)
 		 * wait for available room in the send queue(s)
 		 */
 #ifdef BUSYWAIT
-		if (ioctl(pfd.fd, NIOCTXSYNC, NULL) < 0) {
+		if (ioctl(pfd[0].fd, NIOCTXSYNC, NULL) < 0) {
 			D("ioctl error on queue %d: %s", targ->me,
 					strerror(errno));
 			goto quit;
 		}
 #else /* !BUSYWAIT */
-		if (poll(&pfd, 1, 2000) <= 0) {
+		if (poll(pfd, pfd[1].fd ? 2 : 1, 2000) <= 0) {
 			if (targ->cancel)
 				break;
 			D("poll error/timeout on queue %d: %s", targ->me,
 				strerror(errno));
 			// goto quit;
 		}
-		if (pfd.revents & POLLERR) {
-			D("poll error on %d ring %d-%d", pfd.fd,
+		if (pfd[0].revents & POLLERR) {
+			D("poll error on %d ring %d-%d", pfd[0].fd,
 				targ->nmd->first_tx_ring, targ->nmd->last_tx_ring);
 			goto quit;
 		}
 #endif /* !BUSYWAIT */
+		if (!(pfd[1].revents & POLLOUT)) {
+			/* the socket is not writable yet */
+			continue;
+		}
 		/*
 		 * scan our queues and send on those with room
 		 */
@@ -1714,11 +1736,11 @@ sender_body(void *data)
 	D("flush tail %d head %d on thread %p",
 		txring->tail, txring->head,
 		(void *)pthread_self());
-	if (pfd.events & POLLIN) { /* for stack */
+	if (pfd[0].events & POLLIN) { /* for stack */
 		for (i = 1; i >= 0; i--)
-			poll(&pfd, 1, i*1000); // XXX just heuristic
+			poll(&pfd[0], 1, i*1000); // XXX just heuristic
 	}
-	ioctl(pfd.fd, NIOCTXSYNC, NULL);
+	ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
 
 	/* final part: wait all the TX queues to be empty. */
 	for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
@@ -1726,7 +1748,7 @@ sender_body(void *data)
 		while (!targ->cancel && nm_tx_pending(txring)) {
 			RD(5, "pending tx tail %d head %d on ring %d",
 				txring->tail, txring->head, i);
-			ioctl(pfd.fd, NIOCTXSYNC, NULL);
+			ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
 			usleep(1); /* wait 1 tick */
 		}
 	}
@@ -2709,7 +2731,7 @@ main(int arc, char **argv)
 	g.virt_header = 0;
 	g.wait_link = 2;
 	g.soff = 0;
-	g.transport = IPPROTO_UDP;
+	g.transport = 0;
 
 	while ((ch = getopt(arc, argv, "46a:f:F:n:i:Il:d:s:D:S:b:c:o:p:"
 	    "T:w:WvR:XC:H:e:E:m:rP:zZAt:")) != -1) {
@@ -3030,7 +3052,7 @@ main(int arc, char **argv)
 			sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		else if (g.transport == IPPROTO_TCP)
 			sfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		if (!sfd) {
+		if (sfd < 0) {
 			perror("socket");
 			goto out;
 		}
@@ -3072,12 +3094,14 @@ main(int arc, char **argv)
 		 * packets on pull mode.
 		 */
 		/* Kill following lines to test non-connec()ed case */
+#if 0
 		if (connect(sfd, (struct sockaddr *)sin, sizeof(*sin))) {
 			perror("connect");
 			close(sfd);
 			goto out;
 		}
 		g.nmsg.nmsg_namelen = 0;
+#endif /* 0 */
 	}
 
 	g.main_fd = g.nmd->fd;
