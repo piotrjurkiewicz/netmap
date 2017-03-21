@@ -814,7 +814,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	if (!(scb->slot->flags & NS_BUSY))
 		D("funny, called on non NS_BUSY slot");
 	scb->slot->flags &= ~NS_BUSY;
-	D("scb %p", scb);
+	ND("scb %p", scb);
 }
 
 void

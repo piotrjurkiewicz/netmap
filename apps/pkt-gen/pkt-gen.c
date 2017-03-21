@@ -1688,8 +1688,9 @@ sender_body(void *data)
 			goto quit;
 		}
 #endif /* !BUSYWAIT */
-		if (!(pfd[1].revents & POLLOUT)) {
+		if (pfd[1].fd && !(pfd[1].revents & POLLOUT)) {
 			/* the socket is not writable yet */
+			D("not connected yet");
 			continue;
 		}
 		/*

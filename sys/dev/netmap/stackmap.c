@@ -317,7 +317,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb->kring = kring;
 			//scb->save_mbuf_destructor = NULL; // why?
 			//scb->flags = 0; // why clear?
-			D("host: buf %p off %d len %d type 0x%04x proto %u",
+			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
@@ -643,7 +643,7 @@ transmit:
 	KASSERT(stackmap_cb_get_state(scb) == SCB_M_SENDPAGE, "invalid state");
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	D("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	ND("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */
