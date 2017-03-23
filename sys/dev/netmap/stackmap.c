@@ -289,7 +289,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
-		D("rx");
 	}
 
 	/* examine all the slots */
@@ -317,7 +316,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb->kring = kring;
 			//scb->save_mbuf_destructor = NULL; // why?
 			//scb->flags = 0; // why clear?
-			ND("host: buf %p off %d len %d type 0x%04x proto %u",
+			D("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
@@ -359,8 +358,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			 * m->tail: end of data/packet
 			 * m->data: beginning of IP header
 			 */
-			ND("rx: nmb %p m %p scb %p type 0x%04x", nmb, m, scb,
-			       	STACKMAP_CB(m), ntohs(*(uint16_t *)(nmb+14)));
+			D("rx: nmb %p m %p scb %p type 0x%04x", nmb, m,
+				scb, ntohs(*(uint16_t *)(nmb+14)));
 			/* ToDo: Expensive, optimize it */
 		}
 
@@ -598,7 +597,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	ND("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
+	D("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
 		m, m->head, skb_headlen(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
@@ -631,7 +630,7 @@ transmit:
 		 * For the latter we must avoid performing sendpage again.
 		 * The backend might drop this packet
 		 */
-		D("queued transmit scb %p", scb);
+		ND("queued transmit scb %p", scb);
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
 		slot->len = slot->offset = slot->next = 0;

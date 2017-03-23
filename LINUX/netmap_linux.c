@@ -1184,7 +1184,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_SENDPAGE);
-	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
+	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
 		(int)(slot - scb->kring->ring->slot), sk,
 		ska->fd, nmb, scb, scb->flags, poff);
 
