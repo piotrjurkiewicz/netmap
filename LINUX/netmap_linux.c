@@ -1155,8 +1155,6 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 {
 	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
-	if (ntohs(m->protocol) == 0x0806)
-		D("ARP");
 	netif_receive_skb(m);
 }
 
@@ -1184,7 +1182,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_SENDPAGE);
-	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
+	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
 		(int)(slot - scb->kring->ring->slot), sk,
 		ska->fd, nmb, scb, scb->flags, poff);
 
@@ -1211,10 +1209,10 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		/* NS_BUSY is also transferred */
 		if (stackmap_extra_enqueue(na, slot)) {
-			ND("no extra space for nmb %p slot %p scb %p", nmb, scb->slot, scb);
+			RD(1, "no extra space for nmb %p slot %p scb %p", nmb, scb->slot, scb);
 			return -EBUSY;
 		}
-		D("enqueued nmb %p to now this slot is at %p scb %p", nmb, scb->slot, scb);
+		RD(1, "enqueued nmb %p to now this slot is at %p scb %p", nmb, scb->slot, scb);
 	}
 	return 0;
 }

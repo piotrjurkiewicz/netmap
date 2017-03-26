@@ -41,7 +41,7 @@
 #include <stdio.h>
 #define NETMAP_WITH_LIBS
 #include <net/netmap_user.h>
-
+#define HAVE_MMSG 1
 
 #include <ctype.h>	// isprint()
 #include <unistd.h>	// sysconf()
@@ -1688,10 +1688,14 @@ sender_body(void *data)
 			goto quit;
 		}
 #endif /* !BUSYWAIT */
-		if (pfd[1].fd && !(pfd[1].revents & POLLOUT)) {
-			/* the socket is not writable yet */
-			D("not connected yet");
-			continue;
+		if (pfd[1].fd) {
+			if (!(pfd[1].revents & POLLOUT)) {
+				/* the socket is not writable yet */
+				D("not connected yet");
+				continue;
+			} else {
+				pfd[1].fd = 0;
+			}
 		}
 		/*
 		 * scan our queues and send on those with room
@@ -1737,10 +1741,15 @@ sender_body(void *data)
 	D("flush tail %d head %d on thread %p",
 		txring->tail, txring->head,
 		(void *)pthread_self());
+#if 0
 	if (pfd[0].events & POLLIN) { /* for stack */
-		for (i = 1; i >= 0; i--)
+		pfd[0].events &= ~POLLOUT;
+		for (i = 2; i >= 0; i--) {
+			D("count down %d", i);
 			poll(&pfd[0], 1, i*1000); // XXX just heuristic
+		}
 	}
+#endif /* 0 */
 	ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
 
 	/* final part: wait all the TX queues to be empty. */
@@ -1749,7 +1758,13 @@ sender_body(void *data)
 		while (!targ->cancel && nm_tx_pending(txring)) {
 			RD(5, "pending tx tail %d head %d on ring %d",
 				txring->tail, txring->head, i);
-			ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
+			/* stack port might need to process incoming packets 
+			 * like ARP and ACK
+			 */
+			if (pfd[0].events & POLLIN)
+				poll(&pfd[0], 1, 1000);
+			else
+				ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
 			usleep(1); /* wait 1 tick */
 		}
 	}

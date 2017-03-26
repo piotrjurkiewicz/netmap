@@ -316,7 +316,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb->kring = kring;
 			//scb->save_mbuf_destructor = NULL; // why?
 			//scb->flags = 0; // why clear?
-			D("host: buf %p off %d len %d type 0x%04x proto %u",
+			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
@@ -597,8 +597,8 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	D("m %p head %p len %u frag %p len %u (type 0x%04x) %s headroom %u",
-		m, m->head, skb_headlen(m),
+	ND("m %p head %p len %u space %u frag %p len %u (type 0x%04x) %s headroom %u",
+		m, m->head, skb_headlen(m), skb_end_offset(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
 		skb_is_nonlinear(m) ?
@@ -630,7 +630,7 @@ transmit:
 		 * For the latter we must avoid performing sendpage again.
 		 * The backend might drop this packet
 		 */
-		ND("queued transmit scb %p", scb);
+		RD(1, "queued transmit scb %p", scb);
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
 		slot->len = slot->offset = slot->next = 0;
@@ -642,7 +642,7 @@ transmit:
 	KASSERT(stackmap_cb_get_state(scb) == SCB_M_SENDPAGE, "invalid state");
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	ND("sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	RD(1, "sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */
