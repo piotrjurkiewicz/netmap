@@ -42,6 +42,7 @@
 #define NETMAP_WITH_LIBS
 #include <net/netmap_user.h>
 #define HAVE_MMSG 1
+#define CONNECT 1
 
 #include <ctype.h>	// isprint()
 #include <unistd.h>	// sysconf()
@@ -1578,14 +1579,23 @@ sender_body(void *data)
 		    perror("calloc");
 		    goto quit;
 	    }
+#ifdef CONNECT
+	    if (connect(fd, (struct sockaddr *)&sin, sizeof(sin))) {
+		    perror("connect");
+		    goto quit;
+	    }
+	    D("connected");
+#endif /* CONNECT */
 	    for (i = 0; i < targ->g->burst; i++) {
 #ifdef HAVE_MMSG
 		    struct msghdr *msg = &mmsg[i].msg_hdr;
 #else
 		    struct msghdr *msg = mmsg + i;
 #endif
+#ifndef CONNECT
 		    msg->msg_name = &sin;
 		    msg->msg_namelen = (socklen_t)sizeof(sin);
+#endif /* !CONNECT */
 		    msg->msg_iov = &iov;
 		    msg->msg_iovlen = 1;
 	    }
