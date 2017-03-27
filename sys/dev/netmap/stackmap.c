@@ -354,6 +354,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			m = nm_os_build_mbuf(na, nmb, slot->len);
 			if (!m)
 				break;
+			nm_set_mbuf_data_destructor(m, &scb->ui,
+				nm_os_stackmap_mbuf_data_destructor);
 			/* m->end: beginning of shinfo
 			 * m->tail: end of data/packet
 			 * m->data: beginning of IP header
@@ -379,6 +381,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 * subsequent packets.
 		 */
 		if (rx) {
+			nm_set_mbuf_data_destructor(m, &scb->ui,
+				nm_os_stackmap_mbuf_data_destructor);
 			nm_os_stackmap_mbuf_recv(m);
 		} else if (nm_os_stackmap_sendpage(na, slot)) {
 			D("early break");
