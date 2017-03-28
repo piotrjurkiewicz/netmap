@@ -306,6 +306,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		u_int nmbsiz = NETMAP_BUF_SIZE(na);
 		int error;
 
+		if (slot->len == 0)
+			goto next_slot;
+
 		if (host) {
 			/*
 			 * Data has been copied to a host ring in 
@@ -316,8 +319,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb = STACKMAP_CB_NMB(nmb, nmbsiz);
 			scb->slot = slot;
 			scb->kring = kring;
-			//scb->save_mbuf_destructor = NULL; // why?
-			//scb->flags = 0; // why clear?
 			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
@@ -326,7 +327,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 
 		scb = STACKMAP_CB_NMB(nmb, nmbsiz);
-		if (stackmap_cb_get_state(scb) == SCB_M_TRANSMIT) {
+		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
 			/* This packet has been dropped */
 			ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x",
 				rx ? "rx" : "tx", j, nmb, scb->flags,
@@ -337,9 +338,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			/* Already processed by but stays here due to stuck */
 			if (stackmap_extra_enqueue(na, slot))
 				break;
-			goto next_slot;
-		}
-		if (slot->len == 0) {
 			goto next_slot;
 		}
 
@@ -647,35 +645,32 @@ transmit:
 
 	slot = scb->slot;
 	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
-	       	/* originated by netmap but has been queued on 
-		 * either extra or txring slot.
-		 * For the latter we must avoid performing sendpage again.
-		 * The backend might drop this packet
+	       	/* originated by netmap but has been queued in either extra
+		 * or txring slot. The backend might drop this packet
 		 */
-		RD(1, "queued transmit scb %p", scb);
+		D("queued transmit scb %p", scb);
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
+		/* keep scb until the final reference goes away */
 		slot->len = slot->offset = slot->next = 0;
-		bzero(scb, sizeof(*scb));
 		netmap_transmit(ifp, m);
 		return 0;
 	}
 
 	KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
+
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	RD(1, "sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	ND(1, "sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */
-		ND("nmb %p frag %p (pageoff %d)", NMB(na, slot), skb_frag_address(&skb_shinfo(m)->frags[0]), skb_shinfo(m)->frags[0].page_offset);
-		//skb_copy_from_linear_data(m, NMB(na, slot) + 2, slot->offset);
+		ND("nmb %p frag %p (pageoff %d)", NMB(na, slot),
+			skb_frag_address(&skb_shinfo(m)->frags[0]),
+			skb_shinfo(m)->frags[0].page_offset);
 		/* We have already validated length */
+		//skb_copy_from_linear_data(m, NMB(na, slot) + 2, slot->offset);
 		memcpy(NMB(na, slot) + 2, m->data, slot->offset);
-		//m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + 2);
-		//skb_copy_bits(m, 0, NMB(na, slot)+2, skb_headlen(m));
-		//test_copy(m, 0, skb_headlen(m), NMB(na, slot)+2);
-		ND("copied type 0x%04x (skb_headlen %d slot->offset %d)", ntohs(*(uint16_t *)(NMB(na, slot) + 14)), skb_headlen(m), slot->offset);
 	} else {
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + 2);
 	}
@@ -686,17 +681,10 @@ transmit:
 	 * or it might holds reference via clone
 	 */
 
-	//struct mbuf *clone;
-	//clone = skb_clone(m, GFP_ATOMIC);
 	nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
-	//nm_set_mbuf_data_destructor(clone, &scb->ui,
-	//		nm_os_stackmap_mbuf_data_destructor);
-	//kfree_skb(clone); // emulate clone is released first
-	ND("clone is released");
 	m_freem(m);
-	ND("orig is released");
-	stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
+	stackmap_cb_set_state(scb, SCB_M_PASSED);
 	ND("nmb %p sent", NMB(na, slot));
 	return 0;
 }
@@ -782,7 +770,8 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		if (!na->virt_hdr_len) {
 			na->virt_hdr_len = nm_os_hw_headroom(hwna->ifp);
 			netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
-			vpna->virt_hdr_len = na->virt_hdr_len; /* for RX path */
+			vpna->virt_hdr_len = hwna->virt_hdr_len = 
+				na->virt_hdr_len; /* for RX path */
 		}
 		KASSERT(na->virt_hdr_len == 2, ("virt_hdr_len %u!\n", na->virt_hdr_len));
 

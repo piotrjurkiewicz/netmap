@@ -1088,7 +1088,7 @@ struct stackmap_cb {
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
 #define SCB_M_STACK	0x00000001
-#define SCB_M_TRANSMIT	0x00000002
+#define SCB_M_PASSED	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
 	struct nm_ubuf_info ui;
@@ -1098,6 +1098,12 @@ static inline void
 stackmap_cb_set_state(struct stackmap_cb *scb, u_int newstate)
 {
 	scb->flags = (SCB_M_MAGIC | newstate);
+}
+
+static inline void
+stackmap_cb_invalidate(struct stackmap_cb *scb)
+{
+	scb->flags = 0;
 }
 
 static inline int

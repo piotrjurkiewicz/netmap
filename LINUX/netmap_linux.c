@@ -813,8 +813,8 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 		panic("x");
 
 	scb = container_of(u, struct stackmap_cb, ui);
-	bzero(scb, sizeof(*scb));
-	D("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
+	stackmap_cb_invalidate(scb);
+	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
 }
 
 void
@@ -900,8 +900,8 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 {
 	struct stackmap_cb *scb = STACKMAP_CB(m);
 
-	if (stackmap_cb_get_state(scb) != SCB_M_TRANSMIT)
-		stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
+	if (stackmap_cb_get_state(scb) != SCB_M_PASSED)
+		stackmap_cb_set_state(scb, SCB_M_PASSED);
 }
 
 int
@@ -921,17 +921,19 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 
 	/* setting data destructor is only safe after skb_orphan_frag()
 	 * in __netif_receive_skb_core().  */
-	if (stackmap_cb_get_state(scb) != SCB_M_TRANSMIT) {
+	if (stackmap_cb_get_state(scb) != SCB_M_PASSED) {
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (stackmap_extra_enqueue(na, slot)) {
+		if (stackmap_extra_enqueue(scb->kring->na, scb->slot)) {
 			RD(1, "no extra space for nmb %p slot %p scb %p",
-					nmb, scb->slot, scb);
+					NMB(scb->kring->na, scb->slot),
+					scb->slot, scb);
 			return -EBUSY;
 		}
 		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
-				nmb, scb->slot, scb);
+				NMB(scb->kring->na, scb->slot),
+				scb->slot, scb);
 	} /* otherwise it has been consumed or sk_data_ready()-ed */
 	return 0;
 }

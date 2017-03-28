@@ -1279,11 +1279,10 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 			int len = MBUF_LEN(m);
 			struct netmap_slot *slot = &ring->slot[nm_i];
 
-			uint16_t t;
-			t = ntohs(*(uint16_t *)(m->data + 12));
-			ND("head %p data %p to %p type 0x%x", m->head, m->data, NMB(na, slot) + 2, t);
-			m_copydata(m, 0, len, NMB(na, slot) + 2);
-			ND("nm %d len %d", nm_i, len);
+			ND("head %p data %p to %p type 0x%x", m->head, m->data,
+				NMB(na, slot) + na->virt_hdr_len,
+				ntohs(*(uint16_t *)(m->data+12)));
+			m_copydata(m, 0, len, NMB(na, slot) + na->virt_hdr_len);
 			if (netmap_verbose)
                                 D("%s", nm_dump_buf(NMB(na, slot),len, 128, NULL));
 
