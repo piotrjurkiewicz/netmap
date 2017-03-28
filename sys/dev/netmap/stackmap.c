@@ -332,7 +332,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x",
 				rx ? "rx" : "tx", j, nmb, scb->flags,
 				ntohs(*(uint16_t *)(nmb+14)));
-			bzero(scb, sizeof(*scb));
+			stackmap_cb_invalidate(scb);
 			goto next_slot;
 		} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 			/* Already processed by but stays here due to stuck */
@@ -360,7 +360,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		/*
 		 * Initialize a new scb
 		 */
-		bzero(scb, sizeof(*scb));
+		stackmap_cb_invalidate(scb);
 		scb->kring = kring;
 		scb->slot = slot;
 

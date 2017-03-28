@@ -887,11 +887,11 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 		return NULL;
 	page = virt_to_page(buf);
 	get_page(page); /* survive __kfree_skb */
-	ND("skb %p data %p page %p ref %d", m, buf, page, page_ref_count(page));
+	ND("skb %p data %p page %p ref %d vlen %d",
+		m, buf, page, page_ref_count(page), na->virt_hdr_len);
 	m->dev = na->ifp;
-	//if (na == stackmap_master(na))
-	skb_reserve(m, STACKMAP_DMA_OFFSET); // m->data and tail
-	skb_put(m, len - STACKMAP_DMA_OFFSET); // advance m->tail and increment m->len
+	skb_reserve(m, na->virt_hdr_len); // m->data and tail
+	skb_put(m, len - na->virt_hdr_len); // advance m->tail and m->len
 	return m;
 }
 
@@ -977,7 +977,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		 */
 		D("error %d in sendpage() slot %d",
 				err, slot - scb->kring->ring->slot);
-		bzero(scb, sizeof(*scb));
+		stackmap_cb_invalidate(scb);
 	}
 
 	/* Didn't reach ndo_start_xmit() */
