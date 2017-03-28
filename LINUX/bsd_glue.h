@@ -537,6 +537,13 @@ struct nm_ubuf_info {
 	struct ubuf_info ubuf;
 };
 
+#define scb_kring(scb)	((struct netmap_kring *)(scb)->ui.ubuf.ctx)
+#define scb_slot(scb)	((struct netmap_slot *)(uintptr_t)(scb)->ui.ubuf.desc)
+#define scbw(scb, kring, slot)	do {\
+	(scb)->ui.ubuf.ctx = (kring);\
+	(scb)->ui.ubuf.desc = (uintptr_t)(slot);\
+} while (0)
+
 static inline void
 nm_set_mbuf_data_destructor(struct mbuf *m,
 	struct nm_ubuf_info *ui, void *cb)

@@ -836,12 +836,13 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	spin_lock_irqsave(&queue->lock, cpu_flags);
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
+		struct netmap_slot *slot = scb_slot(scb);
 
 		/* append this buffer to the scratchpad */
-		scb->slot->fd = stackmap_sk(m->sk)->fd;
-		scb->slot->len = skb_headlen(m);
+		slot->fd = stackmap_sk(m->sk)->fd;
+		slot->len = skb_headlen(m);
 		KASSERT(m->data - m->head <= 255, "too high offset");
-		scb->slot->offset = (uint8_t)(m->data - m->head);
+		slot->offset = (uint8_t)(m->data - m->head);
 		stackmap_add_fdtable(scb, m->head);
 		sk_eat_skb(sk, m);
 		count++;
@@ -910,7 +911,7 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 	struct stackmap_cb *scb = STACKMAP_CB(m);
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
+	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
@@ -925,15 +926,15 @@ nm_os_stackmap_mbuf_recv(struct mbuf *m)
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (stackmap_extra_enqueue(scb->kring->na, scb->slot)) {
+		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
 			RD(1, "no extra space for nmb %p slot %p scb %p",
-					NMB(scb->kring->na, scb->slot),
-					scb->slot, scb);
+					NMB(scb_kring(scb)->na, scb_slot(scb)),
+					scb_slot(scb), scb);
 			return -EBUSY;
 		}
 		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
-				NMB(scb->kring->na, scb->slot),
-				scb->slot, scb);
+				NMB(scb_kring(scb)->na, scb_slot(scb)),
+				scb_slot(scb), scb);
 	} /* otherwise it has been consumed or sk_data_ready()-ed */
 	return 0;
 }
@@ -963,7 +964,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
-		(int)(slot - scb->kring->ring->slot), sk,
+		(int)(slot - scb_kring(scb)->ring->slot), sk,
 		ska->fd, nmb, scb, scb->flags, poff);
 
 	/* let the stack to manage the buffer */
@@ -976,7 +977,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		 * isn't a problem.
 		 */
 		D("error %d in sendpage() slot %d",
-				err, slot - scb->kring->ring->slot);
+				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
 	}
 
@@ -985,11 +986,11 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
 			RD(1, "no extra space for nmb %p slot %p scb %p",
-				nmb, scb->slot, scb);
+				nmb, scb_slot(scb), scb);
 			return -EBUSY;
 		}
 		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
-			nmb, scb->slot, scb);
+			nmb, scb_slot(scb), scb);
 	}
 	return 0;
 }

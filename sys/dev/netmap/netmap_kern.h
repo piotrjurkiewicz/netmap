@@ -1083,16 +1083,15 @@ struct stackmap_adapter {
  * after 1520 data+headroom
  */
 struct stackmap_cb {
-	struct netmap_kring *kring; // to reach scratchpad
-	struct netmap_slot *slot; // might not linked to any ring
+	struct nm_ubuf_info ui; /* ctx keeps kring and desc keeps slot */
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
-#define SCB_M_STACK	0x00000001
-#define SCB_M_PASSED	0x00000002
+#define SCB_M_PASSED	0x00000001
+#define SCB_M_STACK	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
-	struct nm_ubuf_info ui;
-}__attribute__((__packed__)); // 28 byte so far
+	uint32_t spare;
+}; /* 32 byte */
 
 static inline void
 stackmap_cb_set_state(struct stackmap_cb *scb, u_int newstate)
@@ -2072,8 +2071,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 			continue;
 		scb = STACKMAP_CB_NMB(NMB(na, slot),
 				NETMAP_BUF_SIZE(na));
-		scb->kring = NULL;
-		scb->slot = extra;
+		scbw(scb, NULL, extra);
 
 		tmp = *extra;
 		*extra = *slot;

@@ -173,7 +173,7 @@ stackmap_add_fdtable(struct stackmap_cb *scb, char *buf)
 	uint16_t *nfds, *npkts;
 
 	/* obtain ft position */
-	kring = scb->kring; // kring might differ even in a socket?
+	kring = scb_kring(scb); // kring might differ even in a socket?
 	ft = kring->nkr_ft;
 
 	fde = (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
@@ -192,12 +192,12 @@ stackmap_add_fdtable(struct stackmap_cb *scb, char *buf)
 	/* bring the packet to ft */
 	ft_p->ft_buf = buf;
 #define ft_offset	_ft_port
-	ft_p->ft_offset = scb->slot->offset;
-	ft_p->ft_len = scb->slot->len;
+	ft_p->ft_offset = scb_slot(scb)->offset;
+	ft_p->ft_len = scb_slot(scb)->len;
 	ft_p->ft_flags = 0; // for what?
 	ft_p->ft_next = NM_FT_NULL;
-	ft_p->ft_slot = scb->slot;
-	fd_i = scb->slot->fd;
+	ft_p->ft_slot = scb_slot(scb);
+	fd_i = scb_slot(scb)->fd;
 
 	ND("ft_cur %d fd %u, nfds %d len %d off %d", ft_p - ft, fd_i, *nfds, ft_p->ft_len, ft_p->ft_offset);
 
@@ -317,8 +317,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			 */
 			slot->fd = STACKMAP_FD_HOST;
 			scb = STACKMAP_CB_NMB(nmb, nmbsiz);
-			scb->slot = slot;
-			scb->kring = kring;
+			scbw(scb, kring, slot);
 			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
@@ -361,8 +360,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 * Initialize a new scb
 		 */
 		stackmap_cb_invalidate(scb);
-		scb->kring = kring;
-		scb->slot = slot;
+		scbw(scb, kring, slot);
 
 		/* Here we have options:
 		 *
@@ -643,7 +641,7 @@ transmit:
 
 	/* because of valid scb, this is our packet. */
 
-	slot = scb->slot;
+	slot = scb_slot(scb);
 	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 	       	/* originated by netmap but has been queued in either extra
 		 * or txring slot. The backend might drop this packet
@@ -764,18 +762,12 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		vpna = &bna->up.up;
 		hwna = bna->hwna;
 
+		KASSERT(na->nm_mem == slave->nm_mem, "slave has different mem");
+
 		/* For the first slave now it is the first time to have ifp
 		 * We must set buffer offset before finalizing at nm_bdg_ctl()
 		 * callback. As we see, we adopt the value for the first NIC */
-		if (!na->virt_hdr_len) {
-			na->virt_hdr_len = nm_os_hw_headroom(hwna->ifp);
-			netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
-			vpna->virt_hdr_len = hwna->virt_hdr_len = 
-				na->virt_hdr_len; /* for RX path */
-		}
-		KASSERT(na->virt_hdr_len == 2, ("virt_hdr_len %u!\n", na->virt_hdr_len));
-
-		KASSERT(na->nm_mem == slave->nm_mem, "slave has different mem");
+		slave->virt_hdr_len = hwna->virt_hdr_len = na->virt_hdr_len;
 		error = slave->nm_bdg_ctl(slave, &nmr, 1);
 		if (error) {
 			netmap_adapter_put(slave);
@@ -967,6 +959,8 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 		/* install config handler */
 		netmap_bdg_set_ops(sna->up.na_bdg, &ops);
 		//netmap_mem_set_buf_offset(na->nm_mem, STACKMAP_DMA_OFFSET);
+		na->virt_hdr_len = sizeof(struct stackmap_cb);
+		netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 		return stackmap_reg_slaves(na);
 	}
 
