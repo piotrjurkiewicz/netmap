@@ -196,6 +196,7 @@ stackmap_add_fdtable(struct stackmap_cb *scb, char *buf)
 	ft_p->ft_len = scb->slot->len;
 	ft_p->ft_flags = 0; // for what?
 	ft_p->ft_next = NM_FT_NULL;
+	ft_p->ft_slot = scb->slot;
 	fd_i = scb->slot->fd;
 
 	ND("ft_cur %d fd %u, nfds %d len %d off %d", ft_p - ft, fd_i, *nfds, ft_p->ft_len, ft_p->ft_offset);
@@ -320,18 +321,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				nmb, slot->offset, slot->len,
 				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
-			k = nm_next(k, lim_tx);
-			continue;
+			goto next_slot;
 		}
 
-		/* Already processed by but stays here due to stuck */
-		if (slot->flags & NS_BUSY) {
-			/* stack has reference(s) */
-			if (stackmap_extra_enqueue(na,slot))
-				break;
-			k = nm_next(k, lim_tx);
-			continue;
-		}
 		scb = STACKMAP_CB_NMB(nmb, nmbsiz);
 		if (stackmap_cb_get_state(scb) == SCB_M_TRANSMIT) {
 			/* This packet has been dropped */
@@ -339,12 +331,15 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				rx ? "rx" : "tx", j, nmb, scb->flags,
 				ntohs(*(uint16_t *)(nmb+14)));
 			bzero(scb, sizeof(*scb));
-			k = nm_next(k, lim_tx);
-			continue;
+			goto next_slot;
+		} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
+			/* Already processed by but stays here due to stuck */
+			if (stackmap_extra_enqueue(na, slot))
+				break;
+			goto next_slot;
 		}
 		if (slot->len == 0) {
-			k = nm_next(k, lim_tx);
-			continue;
+			goto next_slot;
 		}
 
 		/*
@@ -354,13 +349,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			m = nm_os_build_mbuf(na, nmb, slot->len);
 			if (!m)
 				break;
-			nm_set_mbuf_data_destructor(m, &scb->ui,
-				nm_os_stackmap_mbuf_data_destructor);
 			/* m->end: beginning of shinfo
 			 * m->tail: end of data/packet
 			 * m->data: beginning of IP header
 			 */
-			D("rx: nmb %p m %p scb %p type 0x%04x", nmb, m,
+			ND("rx: nmb %p m %p scb %p type 0x%04x", nmb, m,
 				scb, ntohs(*(uint16_t *)(nmb+14)));
 			/* ToDo: Expensive, optimize it */
 		}
@@ -380,14 +373,14 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 * can be 1, but queued packets (e.g., by ARP) must block
 		 * subsequent packets.
 		 */
-		if (rx) {
-			nm_set_mbuf_data_destructor(m, &scb->ui,
-				nm_os_stackmap_mbuf_data_destructor);
-			nm_os_stackmap_mbuf_recv(m);
-		} else if (nm_os_stackmap_sendpage(na, slot)) {
+		if (rx)
+			error = nm_os_stackmap_mbuf_recv(m);
+		else
+			error = nm_os_stackmap_sendpage(na, slot);
+		if (error) {
 			D("early break");
 			break;
-		}
+next_slot:
 		k = nm_next(k, lim_tx);
 	}
 	//if (!rx) {
@@ -438,14 +431,15 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		do {
 			struct nm_bdg_fwd *ft_p = ft + next;
 			struct netmap_slot *ts, *rs, tmp;
-			struct stackmap_cb *scb;
+			//struct stackmap_cb *scb;
 
 			next = ft_p->ft_next;
 
-			scb = STACKMAP_CB_NMB(ft_p->ft_buf,
-					NETMAP_BUF_SIZE(na));
-			ts = scb->slot;
-			bzero(scb, sizeof(*scb));
+			//scb = STACKMAP_CB_NMB(ft_p->ft_buf,
+			//		NETMAP_BUF_SIZE(na));
+			//ts = scb->slot;
+			//bzero(scb, sizeof(*scb));
+			ts = ft_p->ft_slot;
 
 
 			/* ts already includes fd */
@@ -643,7 +637,7 @@ transmit:
 		return 0;
 	}
 
-	KASSERT(stackmap_cb_get_state(scb) == SCB_M_SENDPAGE, "invalid state");
+	KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
 	RD(1, "sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",

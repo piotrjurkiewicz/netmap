@@ -1087,7 +1087,7 @@ struct stackmap_cb {
 	struct netmap_slot *slot; // might not linked to any ring
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
-#define SCB_M_SENDPAGE	0x00000001
+#define SCB_M_STACK	0x00000001
 #define SCB_M_TRANSMIT	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
@@ -2103,6 +2103,7 @@ struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	uint16_t ft_flags;	/* flags, e.g. indirect */
 	uint16_t ft_len;	/* src fragment len */
 	uint16_t ft_next;	/* next packet to same destination */
+	void *ft_slot;		/* XXX wrap above */
 };
 
 /* struct 'virtio_net_hdr' from linux. */

@@ -801,8 +801,7 @@ u_int nm_os_hw_headroom(struct ifnet *ifp)
 	return LL_RESERVED_SPACE(ifp) - ifp->hard_header_len;
 }
 
-/* Releases stack's reference to data 
- * Releasing the slot is not my job */
+/* Releases stack's reference to data */ 
 void
 nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	bool zerocopy_success)
@@ -811,10 +810,8 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	struct nm_ubuf_info *u = (struct nm_ubuf_info *)uarg;
 
 	scb = container_of(u, struct stackmap_cb, ui);
-	if (!(scb->slot->flags & NS_BUSY))
-		D("funny, called on non NS_BUSY slot");
-	scb->slot->flags &= ~NS_BUSY;
-	ND("scb %p", scb);
+	bzero(scb, sizeof(*scb));
+	D("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
 }
 
 void
@@ -838,7 +835,6 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 
 		/* append this buffer to the scratchpad */
-		__builtin_prefetch(m->head);
 		scb->slot->fd = stackmap_sk(m->sk)->fd;
 		scb->slot->len = skb_headlen(m);
 		KASSERT(m->data - m->head <= 255, "too high offset");
@@ -896,266 +892,45 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	return m;
 }
 
-/* Based on the TX path from __sys_sendmsg(), sock_sendmsg_nosec() to
- * udp_sendpage()/udp_sendmsg(). Msghdr is placed right after user data.
- *
- * We first form a socket send buffer, so we can call
- * udp_push_pending_frames() which dequeues skbs, builds IP header
- * (ip_finish_skb()) then calls udp_send_skb() that finally builds
- * UDP header.
- */
-	/* raw    | headroom | user data | msghdr |    tailroom    | 
-	 * slot  buf        off         len
-	 * skb   head       data        tail         end      shinfo
-	 */
-static int
-stackmap_udp_sendmsg(struct mbuf *m)
+static void
+linux_stackmap_mbuf_destructor(struct mbuf *m)
 {
-	NM_SOCK_T *sk = m->sk;
-	struct nm_msghdr *nmsg = NULL;
+	struct stackmap_cb *scb = STACKMAP_CB(m);
 
-	struct inet_sock *inet = inet_sk(sk);
-	struct udp_sock *up = udp_sk(sk);
-	struct flowi4 fl4_stack;
-	struct flowi4 *fl4;
-	size_t ulen = m->len;
-	struct ipcm_cookie ipc;
-	struct rtable *rt = NULL;
-	int connected = 0;
-	__be32 daddr, faddr, saddr;
-	__be16 dport;
-	u8  tos;
-	int err;
-	struct ip_options_data opt_copy;
-	struct inet_cork *cork = &inet_sk(sk)->cork.base;
-	int hlen, missmatch;
-
-	hlen = STACKMAP_DMA_OFFSET + ETH_HDR_LEN +
-	    sizeof(struct iphdr) + sizeof(struct udphdr);
-
-	KASSERT(cork->opt == NULL, "cork->opt is non NULL");
-
-	/* There maybe a valid nmsg
-	 * XXX Maybe optimize by skipping this in ESTABLISHED state, avoiding 
-	 * touching skb->tail.
-	 * XXX do better way to invalidate nmsg
-	 */
-	if (likely(skb_tailroom(m) >= sizeof(*nmsg))) {
-		nmsg = (struct nm_msghdr *)skb_tail_pointer(m);
-		/* likely() because non-connected case is anyways slow */
-		/* XXX do better way to invalidate nmsg */
-		if (likely(nmsg->nmsg_namelen < sizeof(struct sockaddr_in *)))
-			nmsg = NULL;
-	}
-
-	/* we expect the user embedded msg after data */
-	if (skb_end_pointer(m) - skb_tail_pointer(m) < sizeof(*nmsg))
-		return EINVAL;
-	if (sk->sk_state != TCP_ESTABLISHED) /* XXX do better */
-		nmsg = (struct nm_msghdr *)(skb_tail_pointer(m));
-
-	ipc.opt = NULL;
-	ipc.tx_flags = 0;
-	ipc.ttl = 0;
-	ipc.tos = -1;
-
-	KASSERT(inet != NULL, "no inet");
-
-	fl4 = &inet->cork.fl.u.ip4;
-
-	/* no pending data case so far, but maybe needed */
-
-	ulen += sizeof(struct udphdr);
-
-	if (nmsg) {
-		struct sockaddr_in *sin =
-			(struct sockaddr_in *)nmsg->nmsg_name;
-		if (sin->sin_family != AF_INET) {
-			return -EAFNOSUPPORT;
-		}
-		daddr = sin->sin_addr.s_addr;
-		dport = sin->sin_port;
-		if (dport == 0) {
-			return -EINVAL;
-		}
-	} else { /* no connected socket support so far */
-		if (sk->sk_state != TCP_ESTABLISHED)
-			return -EDESTADDRREQ;
-		daddr = inet->inet_daddr;
-		dport = inet->inet_dport;
-		connected = 1;
-	}
-#ifdef NETMAP_LINUX_HAVE_SO_TIMESTAMPING /* sockc member */
-	ipc.sockc.tsflags = sk->sk_tsflags;
-#endif /* NETMAP_LINUX_HAVE_SO_TIMESTAMPING */
-	ipc.addr = inet->inet_saddr;
-	ipc.oif = sk->sk_bound_dev_if;
-
-	/* no control msg support so far */
-
-	if (!ipc.opt) { /* always true */
-		struct ip_options_rcu *inet_opt;
-
-		rcu_read_lock();
-		inet_opt = rcu_dereference(inet->inet_opt);
-		if (inet_opt) {
-			memcpy(&opt_copy, inet_opt,
-			       sizeof(*inet_opt) + inet_opt->opt.optlen);
-			ipc.opt = &opt_copy.opt;
-			hlen += inet_opt->opt.optlen;
-		}
-		rcu_read_unlock();
-	}
-
-	saddr = ipc.addr;
-	ipc.addr = faddr = daddr;
-
-#ifdef NETMAP_LINUX_HAVE_SO_TIMESTAMPING
-	sock_tx_timestamp(sk, ipc.sockc.tsflags, &ipc.tx_flags);
-#endif /* NETMAP_LINUX_HAVE_SO_TIMESTAMPING */
-
-	if (ipc.opt && ipc.opt->opt.srr) {
-		if (!daddr)
-			return -EINVAL;
-		faddr = ipc.opt->opt.faddr;
-	}
-	tos = get_rttos(&ipc, inet);
-	if (sock_flag(sk, SOCK_LOCALROUTE) ||
-	    (ipc.opt && ipc.opt->opt.is_strictroute)) {
-		tos |= RTO_ONLINK;
-	}
-	/* no multicast */
-	if (!ipc.oif)
-		ipc.oif = inet->uc_index;
-	/* route lookup */
-	if (connected) {
-		rt = (struct rtable *)sk_dst_check(sk, 0);
-		ND("connected %p", rt);
-	}
-	if (!rt) {
-		struct net *net = sock_net(sk);
-		__u8 flow_flags = inet_sk_flowi_flags(sk);
-
-		fl4 = &fl4_stack;
-
-		flowi4_init_output(fl4, ipc.oif, sk->sk_mark, tos,
-				   RT_SCOPE_UNIVERSE, sk->sk_protocol,
-				   flow_flags,
-				   faddr, saddr, dport, inet->inet_sport);
-
-		/* XXX l3mdev_get_saddr() doesn't exist in 4.9 */
-		/*
-		if (!saddr && ipc.oif) {
-			err = l3mdev_get_saddr(net, ipc.oif, fl4);
-			if (err < 0)
-				goto out;
-		}
-		*/
-
-		security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
-		rt = ip_route_output_flow(net, fl4, sk);
-		if (IS_ERR(rt)) {
-			D("error on ip_route_output_flow()");
-			err = PTR_ERR(rt);
-			rt = NULL;
-			if (err == -ENETUNREACH)
-				IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
-			goto out;
-		}
-
-		/* XXX Drop packets not going to a netmap port */
-		if (!NM_NA_VALID(rt->dst.dev)) {
-			D("output if %s is not netmap mode", rt->dst.dev->name);
-			err = -EINVAL;
-			goto out;
-		}
-
-		err = -EACCES;
-		if ((rt->rt_flags & RTCF_BROADCAST) &&
-		    !sock_flag(sk, SOCK_BROADCAST))
-			goto out;
-	}
-
-	saddr = fl4->saddr;
-	if (!ipc.addr)
-		daddr = ipc.addr = fl4->daddr;
-	/* Don't do lockless fastpath which alloc skb
-	 * But be careful that the original udp_sendmsg() assumes
-	 * non-corkreq case finishes here, never reaching the
-	 * following if statement
-	 */
-
-	/* why do we need this lock ? anyways, batch later */
-	lock_sock(sk);
-
-	fl4 = &inet->cork.fl.u.ip4;
-	fl4->daddr = daddr;
-	fl4->saddr = saddr;
-	fl4->fl4_dport = dport;
-	fl4->fl4_sport = inet->inet_sport;
-	up->pending = AF_INET;
-
-	up->len += ulen;
-
-	/*
-	 * Here is the main difference from udp_sendmsg().
-	 * We already have skb with user data, do equivalent to
-	 * ip_append_data() without skb allocation
-	 */
-	if (!skb_queue_empty(&sk->sk_write_queue))
-		D("queue is not empty");
-
-	m->ip_summed = CHECKSUM_NONE;
-
-	/* remember: data already point to user data */
-	missmatch = hlen - skb_headroom(m);
-	if (missmatch) {
-		RD(1, "copy data for %d-byte extra headroom", missmatch);
-		if (missmatch > 0 && skb_tailroom(m) < missmatch) {
-			D("not enough tailroom %d", skb_tailroom(m));
-			release_sock(sk);
-			return EINVAL;
-		}
-		memcpy(m->data + missmatch, m->data, m->len);
-		skb_reserve(m, missmatch);
-		/* no need to shift shinfo and msghdr */
-	}
-
-	/*
-	 * Before set_network_header,
-	 * skb->data must point the beginning of IP header (see hh_len)
-	 * and skb->tail must point the end of data
-	 */
-	skb_push(m, sizeof(struct udphdr) + sizeof(struct iphdr));
-	skb_set_network_header(m, 0);
-	m->transport_header =
-		(m->network_header + sizeof(struct iphdr));
-	/* find where to start putting bytes */
-
-	cork->dst = &rt->dst;
-	rt = NULL; /* emulate ip_append_data() steals reference */
-	/* enqueuing to socket needed for subsequent ip_finish_skb()
-	 * called in udp_push_pending_frames()
-	 */
-	__skb_queue_tail(&sk->sk_write_queue, m);
-
-	/* XXX make sure that queued packet might be acked
-	 * before being stackmap_enqueued */
-	udp_push_pending_frames(sk);
-
-	/* postpone push_pending_frames for TCP compatibility */
-	release_sock(sk);
-out:
-	ip_rt_put(rt);
-	return 0;
+	if (stackmap_cb_get_state(scb) != SCB_M_TRANSMIT)
+		stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
 }
 
 void
 nm_os_stackmap_mbuf_recv(struct mbuf *m)
 {
+	struct stackmap_cb *scb = STACKMAP_CB(m);
+
+	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, STACKMAP_CB(m)->kring->na->virt_hdr_len);
 	m->protocol = eth_type_trans(m, m->dev);
+
+	/* set mbuf destructor to detect this mbuf consumed */
+	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
+
+	/* pass the packet to the stack */
 	netif_receive_skb(m);
+
+	/* setting data destructor is only safe after skb_orphan_frag()
+	 * in __netif_receive_skb_core().  */
+	if (stackmap_cb_get_state(scb) != SCB_M_TRANSMIT) {
+		nm_set_mbuf_data_destructor(m, &scb->ui,
+				nm_os_stackmap_mbuf_data_destructor);
+		stackmap_cb_set_state(scb, SCB_M_QUEUED);
+		if (stackmap_extra_enqueue(na, slot)) {
+			RD(1, "no extra space for nmb %p slot %p scb %p",
+					nmb, scb->slot, scb);
+			return -EBUSY;
+		}
+		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
+				nmb, scb->slot, scb);
+	} /* otherwise it has been consumed or sk_data_ready()-ed */
+	return 0;
 }
 
 int
@@ -1181,13 +956,12 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	poff = nmb - page_to_virt(page) + na->virt_hdr_len + slot->offset;
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
-	stackmap_cb_set_state(scb, SCB_M_SENDPAGE);
+	stackmap_cb_set_state(scb, SCB_M_STACK);
 	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
 		(int)(slot - scb->kring->ring->slot), sk,
 		ska->fd, nmb, scb, scb->flags, poff);
 
 	/* let the stack to manage the buffer */
-	slot->flags |= NS_BUSY;
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
 	if (err < 0) {
 		/* Treat as if this buffer is consumed and hope mbuf
@@ -1199,20 +973,18 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		D("error %d in sendpage() slot %d",
 				err, slot - scb->kring->ring->slot);
 		bzero(scb, sizeof(*scb));
-		if (slot->flags & NS_BUSY)
-			D("Weird, NS_BUSY on sendpage() error. Clear anyways");
-		slot->flags &= ~NS_BUSY;
 	}
 
 	/* Didn't reach ndo_start_xmit() */
-	if (stackmap_cb_get_state(scb) == SCB_M_SENDPAGE) {
+	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		/* NS_BUSY is also transferred */
 		if (stackmap_extra_enqueue(na, slot)) {
-			RD(1, "no extra space for nmb %p slot %p scb %p", nmb, scb->slot, scb);
+			RD(1, "no extra space for nmb %p slot %p scb %p",
+				nmb, scb->slot, scb);
 			return -EBUSY;
 		}
-		RD(1, "enqueued nmb %p to now this slot is at %p scb %p", nmb, scb->slot, scb);
+		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
+			nmb, scb->slot, scb);
 	}
 	return 0;
 }
