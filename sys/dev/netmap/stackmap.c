@@ -304,6 +304,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		struct mbuf *m;
 		char *nmb = NMB(na, slot);
 		u_int nmbsiz = NETMAP_BUF_SIZE(na);
+		int error;
 
 		if (host) {
 			/*
@@ -380,6 +381,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (error) {
 			D("early break");
 			break;
+		}
 next_slot:
 		k = nm_next(k, lim_tx);
 	}
@@ -501,6 +503,15 @@ next_slot:
 			 * means there are new buffers to report
 			 */
 			if (likely(j != my_start)) {
+				/*
+				 * We have put new packets from hwtail to j.
+				 * Slots referred by the stack have been marked
+				 * as NS_BUSY, which are unmarked eventually.
+				 * In order to recover slots ASAP, we swap out
+				 * their buffers after the backend processes 
+				 * it (i.e., hwcur passes).
+				 */
+				u_int i, hwtail_prev = rxkring->nr_hwtail;
 				rxkring->nr_hwtail = j;
 				still_locked = 0;
 				mtx_unlock(&rxkring->q_lock);
@@ -509,6 +520,19 @@ next_slot:
 				 * netmap_bwrap_notify for bwrap. The latter will
 				 * trigger a txsync on the underlying hwna
 				 */
+				/* nr_hwcur should have been advanced */
+				for (i = hwtail_prev; i != j;
+				     i = nm_next(i, lim_rx)) {
+					struct netmap_slot *s = &ring->slot[i];
+
+					if (s->flags & NS_BUSY) {
+						if (stackmap_extra_enqueue(rxna,
+							&ring->slot[i]))
+							break;
+						/* on success NS_BUSY has been
+					 	* cleared */
+					}
+				}
 			}
 		    }
 		    if (still_locked)
@@ -580,8 +604,8 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	done = stackmap_bdg_flush(kring);
 	/* debug to drain everything */
 	//kring->nr_hwcur = head;
-	kring->nr_hwcur = done;
 	//kring->nr_hwtail = nm_prev(head, kring->nkr_num_slots - 1);
+	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
 	return 0;
 }

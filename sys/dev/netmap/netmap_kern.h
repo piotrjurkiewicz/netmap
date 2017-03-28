@@ -2045,7 +2045,7 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 
 #ifdef WITH_STACK
 struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
-void nm_os_stackmap_mbuf_recv(struct mbuf *);
+int nm_os_stackmap_mbuf_recv(struct mbuf *);
 int nm_os_stackmap_sendpage(struct netmap_adapter *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
 /* TODO: avoid linear search... */

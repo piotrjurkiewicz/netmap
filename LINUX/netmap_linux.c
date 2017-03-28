@@ -809,6 +809,9 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	struct stackmap_cb *scb;
 	struct nm_ubuf_info *u = (struct nm_ubuf_info *)uarg;
 
+	if (!zerocopy_success)
+		panic("x");
+
 	scb = container_of(u, struct stackmap_cb, ui);
 	bzero(scb, sizeof(*scb));
 	D("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
@@ -901,7 +904,7 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 		stackmap_cb_set_state(scb, SCB_M_TRANSMIT);
 }
 
-void
+int
 nm_os_stackmap_mbuf_recv(struct mbuf *m)
 {
 	struct stackmap_cb *scb = STACKMAP_CB(m);
