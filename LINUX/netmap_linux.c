@@ -831,19 +831,30 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	struct sk_buff *m, *tmp;
 	unsigned long cpu_flags;
 	u_int count = 0;
+	struct netmap_kring *kring = NULL;
 
+	/* XXX Out-of-order packets have enqueued in the same round (see
+	 * tcp_data_queue() with an in-order segment with delivered by an
+	 * rxsync context
+	 */
 	/* XXX we should batch this lock outside the function */
 	spin_lock_irqsave(&queue->lock, cpu_flags);
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 		struct netmap_slot *slot = scb_slot(scb);
 
+		if (!kring) {
+			kring = scb_kring(scb);
+			if (!kring)
+				panic("no kring");
+		}
 		/* append this buffer to the scratchpad */
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headlen(m);
 		KASSERT(m->data - m->head <= 255, "too high offset");
 		slot->offset = (uint8_t)(m->data - m->head);
-		stackmap_add_fdtable(scb, m->head);
+		stackmap_add_rx_fdtable(scb, kring);
+		//stackmap_add_fdtable(scb, m->head);
 		sk_eat_skb(sk, m);
 		count++;
 	}
@@ -877,7 +888,7 @@ nm_os_sock_fput(NM_SOCK_T *sk)
  * could batch allocation.
  * Anyways alloc/dealloc overhead of 200 ns is not that bad.
  */
-struct mbuf *
+static struct mbuf *
 nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 {
 	struct mbuf *m;
@@ -905,10 +916,17 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 		stackmap_cb_set_state(scb, SCB_M_PASSED);
 }
 
+/* scb must has been populated */
 int
-nm_os_stackmap_mbuf_recv(struct mbuf *m)
+nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 {
-	struct stackmap_cb *scb = STACKMAP_CB(m);
+	char *nmb = NMB(na, slot);
+	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb);
+	struct mbuf *m;
+
+	m = nm_os_build_mbuf(na, nmb, slot->len);
+	if (!m)
+		return 0; // drop and skip
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);

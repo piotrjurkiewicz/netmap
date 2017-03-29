@@ -1090,7 +1090,7 @@ struct stackmap_cb {
 #define SCB_M_STACK	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
-	uint32_t spare;
+	uint32_t next;
 }; /* 32 byte */
 
 static inline void
@@ -1122,6 +1122,7 @@ netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
 void nm_os_stackmap_data_ready(NM_SOCK_T *);
 u_int nm_os_hw_headroom(struct ifnet *ifp);
 void stackmap_add_fdtable(struct stackmap_cb *, char *);
+void stackmap_add_rx_fdtable(struct stackmap_cb *, struct netmap_kring *);
 NM_SOCK_T *nm_os_sock_fget(int);
 void nm_os_sock_fput(NM_SOCK_T *);
 void nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *, bool);
@@ -2049,8 +2050,8 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
-struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
-int nm_os_stackmap_mbuf_recv(struct mbuf *);
+//struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
+int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
 int nm_os_stackmap_sendpage(struct netmap_adapter *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
 /* TODO: avoid linear search... */
