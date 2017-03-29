@@ -59,7 +59,6 @@
 
 #ifdef WITH_STACK
 #define NM_STACKMAP_PULL 1
-//#define STACKMAP_COPY 1
 static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
 //static int stackmap_mode = 0;
 SYSBEGIN(vars_stack);
@@ -199,7 +198,7 @@ stackmap_add_fdtable(struct stackmap_cb *scb, char *buf)
 	ft_p->ft_slot = scb_slot(scb);
 	fd_i = scb_slot(scb)->fd;
 
-	ND("ft_cur %d fd %u, nfds %d len %d off %d", ft_p - ft, fd_i, *nfds, ft_p->ft_len, ft_p->ft_offset);
+	ND("ft_cur %ld fd %u, nfds %d len %d off %d", ft_p - ft, fd_i, *nfds, ft_p->ft_len, ft_p->ft_offset);
 
 	/* add to fdtable */
 	fde += fd_i;
@@ -303,7 +302,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		struct stackmap_cb *scb;
 		struct mbuf *m;
 		char *nmb = NMB(na, slot);
-		u_int nmbsiz = NETMAP_BUF_SIZE(na);
 		int error;
 
 		if (slot->len == 0)
@@ -316,16 +314,17 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			 * will be swapped in the second pass.
 			 */
 			slot->fd = STACKMAP_FD_HOST;
-			scb = STACKMAP_CB_NMB(nmb, nmbsiz);
+			scb = STACKMAP_CB_NMB(nmb);
 			scbw(scb, kring, slot);
 			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
-				ntohs(*(uint16_t *)(nmb+14)), ((struct nm_iphdr *)(nmb+14))->protocol);
+				ntohs(*(uint16_t *)(nmb+14)),
+				((struct nm_iphdr *)(nmb+14))->protocol);
 			stackmap_add_fdtable(scb, nmb);
 			goto next_slot;
 		}
 
-		scb = STACKMAP_CB_NMB(nmb, nmbsiz);
+		scb = STACKMAP_CB_NMB(nmb);
 		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
 			/* This packet has been dropped */
 			ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x",
@@ -615,7 +614,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	ND("m %p head %p len %u space %u frag %p len %u (type 0x%04x) %s headroom %u",
+	ND("m %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u",
 		m, m->head, skb_headlen(m), skb_end_offset(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
@@ -655,11 +654,11 @@ transmit:
 		return 0;
 	}
 
-	KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
+	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	ND(1, "sendpage, bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	ND(1, "bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */
@@ -667,10 +666,12 @@ transmit:
 			skb_frag_address(&skb_shinfo(m)->frags[0]),
 			skb_shinfo(m)->frags[0].page_offset);
 		/* We have already validated length */
-		//skb_copy_from_linear_data(m, NMB(na, slot) + 2, slot->offset);
-		memcpy(NMB(na, slot) + 2, m->data, slot->offset);
+		//skb_copy_from_linear_data(m, NMB(na, slot) +
+		//na->virt_hdr_len, slot->offset);
+		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
-		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + 2);
+		RD(1, "mismatch %d, copy entire data", mismatch);
+		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}
 
 	stackmap_add_fdtable(scb, NMB(na, slot));
@@ -683,7 +684,6 @@ transmit:
 			nm_os_stackmap_mbuf_data_destructor);
 	m_freem(m);
 	stackmap_cb_set_state(scb, SCB_M_PASSED);
-	ND("nmb %p sent", NMB(na, slot));
 	return 0;
 }
 

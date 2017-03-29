@@ -961,7 +961,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 	get_page(page); // survive __kfree_skb()
 	poff = nmb - page_to_virt(page) + na->virt_hdr_len + slot->offset;
 	len = slot->len - na->virt_hdr_len - slot->offset;
-	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
+	scb = STACKMAP_CB_NMB(nmb);
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
 		(int)(slot - scb_kring(scb)->ring->slot), sk,
@@ -976,7 +976,7 @@ nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
 		 * destructor. So we clear NS_BUSY here. Duplicate clear
 		 * isn't a problem.
 		 */
-		D("error %d in sendpage() slot %d",
+		D("error %d in sendpage() slot %ld",
 				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
 	}
