@@ -272,8 +272,141 @@ stackmap_ska_from_fd(struct netmap_adapter *na, int fd)
 }
 
 static int
-stackmap_bdg_tx(struct netmap_kring *kring)
+stackmap_bdg_flush(struct netmap_kring *kring)
 {
+	int k = kring->nr_hwcur, j;
+	const int rhead = kring->rhead;
+	u_int lim_tx = kring->nkr_num_slots - 1;
+	struct netmap_adapter *na = kring->na;
+	struct netmap_vp_adapter *vpna =
+		(struct netmap_vp_adapter *)na;
+	struct netmap_adapter *rxna;
+	struct stackmap_rx_bdg_fwd *ft;
+	int32_t n, needed, lim_rx, howmany;
+	u_int dring;
+	struct netmap_kring *rxkring;
+	int rx = 0, host = stackmap_is_host(na); // shorthands
+
+	ft = stackmap_get_rx_bdg_fwd(kring);
+	ft->nfds = ft->npkts = 0;
+
+	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
+		RD(1, "failed to obtain rlock");
+		return 0;
+	}
+
+	/* XXX perhaps this is handled later? */
+	if (netmap_bdg_active_ports(vpna->na_bdg) < 2) {
+		RD(1, "only %d active ports",
+				netmap_bdg_active_ports(vpna->na_bdg));
+		goto unlock_out;
+	}
+
+	/* let the host stack packets go earlier */
+
+	if (na == stackmap_master(na) || host)
+		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
+	else {
+		rxna = stackmap_master(na);
+		rx = 1;
+	}
+
+	k = kring->nr_hwcur;
+	for (j = k; j != rhead; j = j == lim_tx ? 0 : j + 1) {
+		struct netmap_slot *slot = &kring->ring->slot[j];
+		struct stackmap_cb *scb;
+		char *nmb = NMB(na, slot);
+		int error;
+
+		__builtin_prefetch(nmb);
+		if (unlikely(slot->len == 0))
+			goto next_slot;
+		scb = STACKMAP_CB_NMB(nmb);
+		if (unlikely(host)) { // XXX no batch in host
+			slot->fd = STACKMAP_FD_HOST;
+			scbw(scb, kring, slot);
+			stackmap_add_rx_fdtable(scb, kring);
+			goto next_slot;
+		}
+		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
+			stackmap_cb_invalidate(scb);
+			goto next_slot;
+		}
+		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
+			if (stackmap_extra_enqueue(na, slot))
+				break;
+			goto next_slot;
+		}
+		stackmap_cb_invalidate(scb);
+		scbw(scb, kring, slot);
+		error = rx ? nm_os_stackmap_recv(na, slot) :
+			     nm_os_stackmap_send(na, slot);
+		if (error) {
+			D("early break");
+			break;
+		}
+next_slot:
+		k = nm_next(k, lim_tx);
+	}
+
+	if (unlikely(!nm_netmap_on(rxna))) {
+		D("BUG: we cannot handle this case now!");
+		goto unlock_out;
+	}
+	dring = kring - NMR(kring->na, NR_TX);
+	nm_bound_var(&dring, 0, 0, rxna->num_rx_rings, NULL);
+	rxkring = NMR(rxna, NR_RX) + dring;
+	lim_rx = rxkring->nkr_num_slots - 1;
+	needed = ft->npkts;
+	ft->npkts = 0;
+	j = rxkring->nr_hwtail;
+
+	/* under lock */
+
+	mtx_lock(&rxkring->q_lock);
+	if (unlikely(rxkring->nkr_stopped)) {
+		mtx_unlock(&rxkring->q_lock);
+		goto unlock_out;
+	}
+	howmany = nm_kr_space(rxkring, 1);
+	if (needed < howmany)
+		howmany = needed;
+	for (n = 0; n < ft->nfds; n++) {
+		uint32_t fd, next;
+		struct stackmap_bdg_q *bq;
+
+		fd = ft->fds[n];
+		bq = ft->qs + fd;
+		next = bq->bq_head;
+		do {
+			struct netmap_slot tmp, *ts, *rs;
+			struct stackmap_cb *scb;
+
+			tmp.buf_idx = next;
+			scb = STACKMAP_CB_NMB(NMB(na, &tmp));
+			ts = scb_slot(scb);
+			next = scb->next;
+			scb->next = STACKMAP_FT_NULL;
+
+			rs = rxkring->ring->slot + j;
+			tmp = *rs;
+			*rs = *ts;
+			*ts = tmp;
+			ts->len = ts->offset = 0;
+			ts->flags |= NS_BUF_CHANGED;
+			rs->flags |= NS_BUF_CHANGED;
+			j = nm_next(j, lim_rx);
+		} while (--howmany && next != STACKMAP_FT_NULL);
+		bq->bq_head = bq->bq_tail = STACKMAP_FT_NULL;
+	}
+	ft->nfds = 0;
+	rxkring->nr_hwtail = j;
+	mtx_unlock(&rxkring->q_lock);
+
+	rxkring->nm_notify(rxkring, 0);
+unlock_out:
+	netmap_bdg_runlock(vpna->na_bdg);
+	return k;
 }
 
 static int
@@ -386,7 +519,7 @@ unlock_out:
 	netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
-
+#if 0
 static int
 stackmap_bdg_flush(struct netmap_kring *kring)
 {
@@ -708,6 +841,7 @@ unlock_out:
 	return k;
 //	return 0;
 }
+#endif /* 0 */
 
 /* rxsync for stackport */
 static int
@@ -833,7 +967,8 @@ transmit:
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}
 
-	stackmap_add_fdtable(scb, NMB(na, slot));
+	//stackmap_add_fdtable(scb, NMB(na, slot));
+	stackmap_add_rx_fdtable(scb, scb_kring(scb));
 
 	/* We don't know when the stack actually releases the data
 	 * or it might holds reference via clone

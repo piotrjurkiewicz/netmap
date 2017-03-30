@@ -958,7 +958,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 }
 
 int
-nm_os_stackmap_sendpage(struct netmap_adapter *na, struct netmap_slot *slot)
+nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 {
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_cb *scb;
