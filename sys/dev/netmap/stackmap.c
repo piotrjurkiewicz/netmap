@@ -134,16 +134,13 @@ enum {
 
 #define STACKMAP_FD_HOST	(NM_BDG_MAXPORTS*NM_BDG_MAXRINGS-1)
 
-struct stackmap_bdg_q {
-	uint32_t bq_head;
-	uint32_t bq_tail;
-};
-
 struct stackmap_rx_bdg_fwd {
+	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX];
+	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS / 2];
 	uint16_t nfds;
 	uint16_t npkts;
+	u_int ft_cur;
 	uint32_t fds[NM_BDG_BATCH_MAX];
-	struct stackmap_bdg_q qs[0];
 };
 
 #define STACKMAP_FT_NULL	0	// invalid buf index
@@ -158,20 +155,29 @@ stackmap_add_rx_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 {
 	struct netmap_slot *slot = scb_slot(scb);
 	struct stackmap_rx_bdg_fwd *ft;
+	struct nm_bdg_fwd *ft_p;
 	uint32_t fd = slot->fd;
-	struct stackmap_bdg_q *bq;
+	struct nm_bdg_q *fde;
 	uint32_t *fds;
+	int i;
 
 	ft = stackmap_get_rx_bdg_fwd(kring);
+	i = ft->ft_cur++;
+	if (unlikely(ft->ft_cur > NM_BDG_BATCH_MAX)) {
+		D("ft full");
+		return;
+	}
 	fds = ft->fds;
-	bq = ft->qs + fd;
-	if (bq->bq_head == STACKMAP_FT_NULL) {
-		bq->bq_head = bq->bq_tail = slot->buf_idx;
+	ft_p = ft->ft + i;
+	ft_p->ft_next = NM_FT_NULL;
+	ft_p->ft_slot = slot;
+	fde = ft->fde + fd;
+	if (fde->bq_head == NM_FT_NULL) {
+		fde->bq_head = fde->bq_tail = i;
 		fds[ft->nfds++] = fd;
 	} else {
-		struct netmap_slot s = { bq->bq_tail };
-		struct stackmap_cb *prev = STACKMAP_CB_NMB(NMB(kring->na, &s));
-		prev->next = bq->bq_tail = slot->buf_idx;
+		ft->ft[fde->bq_tail].ft_next = i;
+		fde->bq_tail = i;
 	}
 	ft->npkts++;
 }
@@ -289,6 +295,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	ft = stackmap_get_rx_bdg_fwd(kring);
 	ft->nfds = ft->npkts = 0;
+	ft->ft_cur = 0;
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -372,34 +379,32 @@ next_slot:
 	if (needed < howmany)
 		howmany = needed;
 	for (n = 0; n < ft->nfds; n++) {
+		struct nm_bdg_q *bq;
 		uint32_t fd, next;
-		struct stackmap_bdg_q *bq;
 
 		fd = ft->fds[n];
-		bq = ft->qs + fd;
+		bq = ft->fde + fd;
 		next = bq->bq_head;
 		do {
+			struct nm_bdg_fwd *ft_p = ft->ft + next;
 			struct netmap_slot tmp, *ts, *rs;
-			struct stackmap_cb *scb;
 
-			tmp.buf_idx = next;
-			scb = STACKMAP_CB_NMB(NMB(na, &tmp));
-			ts = scb_slot(scb);
-			next = scb->next;
-			scb->next = STACKMAP_FT_NULL;
+			next = ft_p->ft_next;
+			ts = ft_p->ft_slot;
 
-			rs = rxkring->ring->slot + j;
+			rs = &rxkring->ring->slot[j];
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
 			ts->len = ts->offset = 0;
+			ts->fd = 0;
 			ts->flags |= NS_BUF_CHANGED;
 			rs->flags |= NS_BUF_CHANGED;
 			j = nm_next(j, lim_rx);
-		} while (--howmany && next != STACKMAP_FT_NULL);
-		bq->bq_head = bq->bq_tail = STACKMAP_FT_NULL;
+		} while (--howmany && next != NM_FT_NULL);
+		bq->bq_head = bq->bq_tail = NM_FT_NULL;
+		bq->bq_len = 0;
 	}
-	ft->nfds = 0;
 	rxkring->nr_hwtail = j;
 	mtx_unlock(&rxkring->q_lock);
 
@@ -484,10 +489,10 @@ stackmap_bdg_rx(struct netmap_kring *kring)
 		howmany = needed;
 	for (n = 0; n < ft->nfds; n++) {
 		uint32_t fd, next;
-		struct stackmap_bdg_q *bq;
+		struct nm_bdg_q *bq;
 
 		fd = ft->fds[n];
-		bq = ft->qs + fd;
+		bq = ft->fde + fd;
 		next = bq->bq_head;
 		do {
 			struct netmap_slot tmp, *ts, *rs;
