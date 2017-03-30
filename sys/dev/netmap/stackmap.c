@@ -134,13 +134,13 @@ enum {
 
 #define STACKMAP_FD_HOST	(NM_BDG_MAXPORTS*NM_BDG_MAXRINGS-1)
 
-struct stackmap_rx_bdg_fwd {
+struct stackmap_bdg_fwd {
 	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX];
-	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS / 2];
 	uint16_t nfds;
 	uint16_t npkts;
 	u_int ft_cur;
 	uint32_t fds[NM_BDG_BATCH_MAX];
+	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS / 2];
 };
 
 #define STACKMAP_FT_NULL	0	// invalid buf index
@@ -158,7 +158,6 @@ stackmap_add_rx_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 	struct nm_bdg_fwd *ft_p;
 	uint32_t fd = slot->fd;
 	struct nm_bdg_q *fde;
-	uint32_t *fds;
 	int i;
 
 	ft = stackmap_get_rx_bdg_fwd(kring);
@@ -167,14 +166,13 @@ stackmap_add_rx_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 		D("ft full");
 		return;
 	}
-	fds = ft->fds;
 	ft_p = ft->ft + i;
 	ft_p->ft_next = NM_FT_NULL;
 	ft_p->ft_slot = slot;
 	fde = ft->fde + fd;
 	if (fde->bq_head == NM_FT_NULL) {
 		fde->bq_head = fde->bq_tail = i;
-		fds[ft->nfds++] = fd;
+		ft->fds[ft->nfds++] = fd;
 	} else {
 		ft->ft[fde->bq_tail].ft_next = i;
 		fde->bq_tail = i;

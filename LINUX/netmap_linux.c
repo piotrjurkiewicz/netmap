@@ -851,7 +851,6 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		/* append this buffer to the scratchpad */
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headlen(m);
-		KASSERT(m->data - m->head <= 255, "too high offset");
 		slot->offset = (uint8_t)(m->data - m->head);
 		stackmap_add_rx_fdtable(scb, kring);
 		//stackmap_add_fdtable(scb, m->head);

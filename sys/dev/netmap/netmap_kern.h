@@ -2101,13 +2101,15 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
  * ft_frags and ft_next are valid only on the first fragment.
  */
 struct nm_bdg_fwd {	/* forwarding entry for a bridge */
-	void *ft_buf;		/* netmap or indirect buffer */
+	union {
+		void *ft_buf;		/* netmap or indirect buffer */
+		void *ft_slot;
+	};
 	uint8_t ft_frags;	/* how many fragments (only on 1st frag) */
 	uint8_t _ft_port;	/* dst port (unused) */
 	uint16_t ft_flags;	/* flags, e.g. indirect */
 	uint16_t ft_len;	/* src fragment len */
 	uint16_t ft_next;	/* next packet to same destination */
-	void *ft_slot;		/* XXX wrap above */
 };
 
 /* struct 'virtio_net_hdr' from linux. */
