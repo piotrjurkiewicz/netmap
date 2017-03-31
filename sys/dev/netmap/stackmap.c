@@ -132,17 +132,39 @@ enum {
 	NM_STACK_CONSUMED_RESERVING,
 };
 
+/*
+ * We need to form lists using scb and buf_idx, because they
+ * can be very long due to ofo packets that have been queued
+ */
+#define STACKMAP_FT_SCB
 #define STACKMAP_FD_HOST	(NM_BDG_MAXPORTS*NM_BDG_MAXRINGS-1)
 
+#ifdef STACKMAP_FT_SCB
+struct stackmap_bdg_q {
+	uint32_t bq_head;
+	uint32_t bq_tail;
+};
+#endif
+
 struct stackmap_bdgfwd {
+#ifdef STACKMAP_FT_SCB
+	uint16_t nfds;
+	uint16_t npkts;
+	struct stackmap_bdg_q fde[NM_BDG_BATCH_MAX*4]; /* XXX */
+#else
 	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX];
 	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS]; // 8 byte left
 	uint16_t nfds;
-	uint16_t ft_cur;
+	uint16_t npkts;
+#endif
 	uint32_t fds[NM_BDG_BATCH_MAX/2]; // max fd index
 };
+#ifdef STACKMAP_FT_SCB
+#define STACKMAP_FT_NULL 0	// invalid buf index
+#else
+#define STACKMAP_FT_NULL NM_FT_NULL
+#endif /* STACKMAP_FT_SCB */
 
-#define STACKMAP_FT_NULL	0	// invalid buf index
 static inline struct stackmap_bdgfwd *
 stackmap_get_bdg_fwd(struct netmap_kring *kring)
 {
@@ -154,28 +176,45 @@ stackmap_add_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 {
 	struct netmap_slot *slot = scb_slot(scb);
 	struct stackmap_bdgfwd *ft;
-	struct nm_bdg_fwd *ft_p;
 	uint32_t fd = slot->fd;
+#ifdef STACKMAP_FT_SCB
+	struct stackmap_bdg_q *fde;
+#else
+	struct nm_bdg_fwd *ft_p;
 	struct nm_bdg_q *fde;
+#endif
 	int i;
 
 	ft = stackmap_get_bdg_fwd(kring);
-	i = ft->ft_cur++;
-	if (unlikely(ft->ft_cur > NM_BDG_BATCH_MAX)) {
+#ifdef STACKMAP_FT_SCB
+	i = slot->buf_idx;
+	scb->next = STACKMAP_FT_NULL;
+#else
+	if (unlikely(ft->npkts > NM_BDG_BATCH_MAX)) {
 		D("ft full");
 		return;
 	}
+	i = ft->npkts;
 	ft_p = ft->ft + i;
-	ft_p->ft_next = NM_FT_NULL;
+	ft_p->ft_next = STACKMAP_FT_NULL;
 	ft_p->ft_slot = slot;
+#endif
 	fde = ft->fde + fd;
-	if (fde->bq_head == NM_FT_NULL) {
+	if (fde->bq_head == STACKMAP_FT_NULL) {
 		fde->bq_head = fde->bq_tail = i;
 		ft->fds[ft->nfds++] = fd;
 	} else {
+#ifdef STACKMAP_FT_SCB
+		struct netmap_slot s = { fde->bq_tail };
+		struct stackmap_cb *prev = STACKMAP_CB_NMB(NMB(kring->na, &s),
+				NETMAP_BUF_SIZE(kring->na));
+		prev->next = fde->bq_tail = i;
+#else
 		ft->ft[fde->bq_tail].ft_next = i;
 		fde->bq_tail = i;
+#endif
 	}
+	ft->npkts++;
 }
 
 /* TX:
@@ -292,7 +331,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	bool rx = 0, host = stackmap_is_host(na); // shorthands
 
 	ft = stackmap_get_bdg_fwd(kring);
-	ft->nfds = ft->ft_cur = 0;
+	ft->npkts = ft->nfds = 0;
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -361,8 +400,7 @@ next_slot:
 	nm_bound_var(&dring, 0, 0, rxna->num_rx_rings, NULL);
 	rxkring = NMR(rxna, NR_RX) + dring;
 	lim_rx = rxkring->nkr_num_slots - 1;
-	needed = ft->ft_cur;
-	ft->ft_cur = 0;
+	needed = ft->npkts;
 	j = rxkring->nr_hwtail;
 
 	/* under lock */
@@ -376,20 +414,36 @@ next_slot:
 	if (needed < howmany)
 		howmany = needed;
 	for (n = 0; n < ft->nfds; n++) {
+#ifdef STACKMAP_FT_SCB
+		struct stackmap_bdg_q *bq;
+#else
 		struct nm_bdg_q *bq;
+#endif
 		uint32_t fd, next;
 
 		fd = ft->fds[n];
 		bq = ft->fde + fd;
 		next = bq->bq_head;
 		do {
-			struct nm_bdg_fwd *ft_p = ft->ft + next;
 			struct netmap_slot tmp, *ts, *rs;
+#ifdef STACKMAP_FT_SCB
+			struct stackmap_cb *scb;
+#else
+			struct nm_bdg_fwd *ft_p = ft->ft + next;
+#endif
+			rs = &rxkring->ring->slot[j];
+			__builtin_prefetch(rs);
+#ifdef STACKMAP_FT_SCB
+			tmp.buf_idx = next;
+			scb = STACKMAP_CB_NMB(NMB(na, &tmp),
+					      NETMAP_BUF_SIZE(na));
+			next = scb->next;
+			ts = scb_slot(scb);
+#else /* !STACKMAP_FT_SCB */
 
 			next = ft_p->ft_next;
 			ts = ft_p->ft_slot;
-
-			rs = &rxkring->ring->slot[j];
+#endif
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
@@ -398,9 +452,11 @@ next_slot:
 			ts->flags |= NS_BUF_CHANGED;
 			rs->flags |= NS_BUF_CHANGED;
 			j = nm_next(j, lim_rx);
-		} while (--howmany && next != NM_FT_NULL);
-		bq->bq_head = bq->bq_tail = NM_FT_NULL;
+		} while (--howmany && next != STACKMAP_FT_NULL);
+		bq->bq_head = bq->bq_tail = STACKMAP_FT_NULL;
+#ifndef STACKMAP_FT_SCB
 		bq->bq_len = 0;
+#endif
 	}
 	rxkring->nr_hwtail = j;
 	mtx_unlock(&rxkring->q_lock);

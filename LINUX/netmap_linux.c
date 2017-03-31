@@ -841,14 +841,16 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	spin_lock_irqsave(&queue->lock, cpu_flags);
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
-		struct netmap_slot *slot = scb_slot(scb);
+		struct netmap_slot *slot;
 
+		__builtin_prefetch(scb);
 		if (!kring) {
 			kring = scb_kring(scb);
 			if (!kring)
 				panic("no kring");
 		}
 		/* append this buffer to the scratchpad */
+		slot = scb_slot(scb);
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headlen(m);
 		slot->offset = (uint8_t)(m->data - m->head);

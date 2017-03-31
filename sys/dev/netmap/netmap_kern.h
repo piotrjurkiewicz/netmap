@@ -1090,7 +1090,7 @@ struct stackmap_cb {
 #define SCB_M_STACK	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
-	uint32_t next;
+	uint32_t next; // used only if STACKMAP_FT_SCB defined
 } __attribute__((__packed__)); /* 32 byte */
 
 static inline void
