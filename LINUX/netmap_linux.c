@@ -852,8 +852,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headlen(m);
 		slot->offset = (uint8_t)(m->data - m->head);
-		stackmap_add_rx_fdtable(scb, kring);
-		//stackmap_add_fdtable(scb, m->head);
+		stackmap_add_fdtable(scb, kring);
 		sk_eat_skb(sk, m);
 		count++;
 	}

@@ -1091,7 +1091,7 @@ struct stackmap_cb {
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;
 	uint32_t next;
-}; /* 32 byte */
+} __attribute__((__packed__)); /* 32 byte */
 
 static inline void
 stackmap_cb_set_state(struct stackmap_cb *scb, u_int newstate)
@@ -1121,8 +1121,7 @@ int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
 netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
 void nm_os_stackmap_data_ready(NM_SOCK_T *);
 u_int nm_os_hw_headroom(struct ifnet *ifp);
-void stackmap_add_fdtable(struct stackmap_cb *, char *);
-void stackmap_add_rx_fdtable(struct stackmap_cb *, struct netmap_kring *);
+void stackmap_add_fdtable(struct stackmap_cb *, struct netmap_kring *);
 NM_SOCK_T *nm_os_sock_fget(int);
 void nm_os_sock_fput(NM_SOCK_T *);
 void nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *, bool);

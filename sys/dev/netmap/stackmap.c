@@ -134,33 +134,32 @@ enum {
 
 #define STACKMAP_FD_HOST	(NM_BDG_MAXPORTS*NM_BDG_MAXRINGS-1)
 
-struct stackmap_bdg_fwd {
+struct stackmap_bdgfwd {
 	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX];
+	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS]; // 8 byte left
 	uint16_t nfds;
-	uint16_t npkts;
-	u_int ft_cur;
-	uint32_t fds[NM_BDG_BATCH_MAX];
-	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS / 2];
+	uint16_t ft_cur;
+	uint32_t fds[NM_BDG_BATCH_MAX/2]; // max fd index
 };
 
 #define STACKMAP_FT_NULL	0	// invalid buf index
-static inline struct stackmap_rx_bdg_fwd *
-stackmap_get_rx_bdg_fwd(struct netmap_kring *kring)
+static inline struct stackmap_bdgfwd *
+stackmap_get_bdg_fwd(struct netmap_kring *kring)
 {
-	return (struct stackmap_rx_bdg_fwd *)kring->nkr_ft;
+	return (struct stackmap_bdgfwd *)kring->nkr_ft;
 }
 
 void
-stackmap_add_rx_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
+stackmap_add_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 {
 	struct netmap_slot *slot = scb_slot(scb);
-	struct stackmap_rx_bdg_fwd *ft;
+	struct stackmap_bdgfwd *ft;
 	struct nm_bdg_fwd *ft_p;
 	uint32_t fd = slot->fd;
 	struct nm_bdg_q *fde;
 	int i;
 
-	ft = stackmap_get_rx_bdg_fwd(kring);
+	ft = stackmap_get_bdg_fwd(kring);
 	i = ft->ft_cur++;
 	if (unlikely(ft->ft_cur > NM_BDG_BATCH_MAX)) {
 		D("ft full");
@@ -177,7 +176,6 @@ stackmap_add_rx_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 		ft->ft[fde->bq_tail].ft_next = i;
 		fde->bq_tail = i;
 	}
-	ft->npkts++;
 }
 
 /* TX:
@@ -197,6 +195,7 @@ stackmap_fdtable(struct nm_bdg_fwd *ft)
 	return (struct nm_bdg_q *)(ft + NM_BDG_BATCH_MAX);
 }
 
+#if 0
 static inline uint16_t *
 stackmap_nfdsp(struct nm_bdg_q *fdtable)
 {
@@ -260,6 +259,7 @@ stackmap_add_fdtable(struct stackmap_cb *scb, char *buf)
 	(*npkts)++;
 #undef ft_offset
 }
+#endif /* 0 */
 
 struct stackmap_sk_adapter *
 stackmap_ska_from_fd(struct netmap_adapter *na, int fd)
@@ -285,15 +285,14 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	struct netmap_vp_adapter *vpna =
 		(struct netmap_vp_adapter *)na;
 	struct netmap_adapter *rxna;
-	struct stackmap_rx_bdg_fwd *ft;
+	struct stackmap_bdgfwd *ft;
 	int32_t n, needed, lim_rx, howmany;
 	u_int dring;
 	struct netmap_kring *rxkring;
-	int rx = 0, host = stackmap_is_host(na); // shorthands
+	bool rx = 0, host = stackmap_is_host(na); // shorthands
 
-	ft = stackmap_get_rx_bdg_fwd(kring);
-	ft->nfds = ft->npkts = 0;
-	ft->ft_cur = 0;
+	ft = stackmap_get_bdg_fwd(kring);
+	ft->nfds = ft->ft_cur = 0;
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -330,7 +329,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (unlikely(host)) { // XXX no batch in host
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
-			stackmap_add_rx_fdtable(scb, kring);
+			stackmap_add_fdtable(scb, kring);
 			goto next_slot;
 		}
 		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
@@ -362,8 +361,8 @@ next_slot:
 	nm_bound_var(&dring, 0, 0, rxna->num_rx_rings, NULL);
 	rxkring = NMR(rxna, NR_RX) + dring;
 	lim_rx = rxkring->nkr_num_slots - 1;
-	needed = ft->npkts;
-	ft->npkts = 0;
+	needed = ft->ft_cur;
+	ft->ft_cur = 0;
 	j = rxkring->nr_hwtail;
 
 	/* under lock */
@@ -412,6 +411,7 @@ unlock_out:
 	return k;
 }
 
+#if 0
 static int
 stackmap_bdg_rx(struct netmap_kring *kring)
 {
@@ -422,13 +422,14 @@ stackmap_bdg_rx(struct netmap_kring *kring)
 	struct netmap_vp_adapter *vpna =
 		(struct netmap_vp_adapter *)na;
 	struct netmap_adapter *rxna;
-	struct stackmap_rx_bdg_fwd *ft;
+	struct stackmap_bdgfwd *ft;
 	int32_t n, needed, lim_rx, howmany;
 	u_int dring;
 	struct netmap_kring *rxkring;
 
-	ft = stackmap_get_rx_bdg_fwd(kring);
-	ft->nfds = ft->npkts = 0;
+	ft = stackmap_get_bdgfwd(kring);
+	//ft->nfds = ft->npkts = 0;
+	ft->nfds = ft->ft_cur = 0;
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -471,8 +472,8 @@ stackmap_bdg_rx(struct netmap_kring *kring)
 	nm_bound_var(&dring, 0, 0, rxna->num_rx_rings, NULL);
 	rxkring = NMR(rxna, NR_RX) + dring;
 	lim_rx = rxkring->nkr_num_slots - 1;
-	needed = ft->npkts;
-	ft->npkts = 0;
+	needed = ft->ft_cur;
+	ft->ft_cur = 0;
 	j = rxkring->nr_hwtail;
 
 	/* under lock */
@@ -522,7 +523,6 @@ unlock_out:
 	netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
-#if 0
 static int
 stackmap_bdg_flush(struct netmap_kring *kring)
 {
@@ -891,8 +891,11 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		done = head;
 		return 0;
 	}
+	/*
 	done = (na == stackmap_master(na) || stackmap_is_host(na)) ?
 	       	stackmap_bdg_flush(kring) : stackmap_bdg_rx(kring);
+		*/
+	done = stackmap_bdg_flush(kring);
 	/* debug to drain everything */
 	//kring->nr_hwcur = head;
 	//kring->nr_hwtail = nm_prev(head, kring->nkr_num_slots - 1);
@@ -970,8 +973,7 @@ transmit:
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}
 
-	//stackmap_add_fdtable(scb, NMB(na, slot));
-	stackmap_add_rx_fdtable(scb, scb_kring(scb));
+	stackmap_add_fdtable(scb, scb_kring(scb));
 
 	/* We don't know when the stack actually releases the data
 	 * or it might holds reference via clone
@@ -1257,6 +1259,7 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 		netmap_bdg_set_ops(sna->up.na_bdg, &ops);
 		//netmap_mem_set_buf_offset(na->nm_mem, STACKMAP_DMA_OFFSET);
 		na->virt_hdr_len = sizeof(struct stackmap_cb);
+		D("virt_hdr_len %d", sizeof(struct stackmap_cb));
 		netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 		return stackmap_reg_slaves(na);
 	}
