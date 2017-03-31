@@ -969,7 +969,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	int err;
 
 	ska = stackmap_ska_from_fd(na, slot->fd);
-	if (!ska) {
+	if (unlikely(!ska)) {
 		D("no ska for fd %d (na %s)", slot->fd, na->name);
 		return 0;
 	}
@@ -987,7 +987,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 
 	/* let the stack to manage the buffer */
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
-	if (err < 0) {
+	if (unlikely(err < 0)) {
 		/* Treat as if this buffer is consumed and hope mbuf
 		 * has been freed.
 		 * mbuf hasn't reached ndo_start_xmit() that sets ubuf 
@@ -1000,7 +1000,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	}
 
 	/* Didn't reach ndo_start_xmit() */
-	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
+	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
 			RD(1, "no extra space for nmb %p slot %p scb %p",

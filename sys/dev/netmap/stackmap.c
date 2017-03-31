@@ -90,7 +90,6 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 	struct netmap_adapter *na, *vpna, *mna;
 	enum txrx t = NR_RX;
 
-	KASSERT(kring, "kring is NULL");
 	na = kring->na;
 	vpna = (struct netmap_adapter *)na->na_private;
 	if (!vpna)
@@ -295,10 +294,10 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		char *nmb = NMB(na, slot);
 		int error;
 
-		__builtin_prefetch(nmb);
 		if (unlikely(slot->len == 0))
 			goto next_slot;
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
+		__builtin_prefetch(scb);
 		if (unlikely(host)) { // XXX no batch in host
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
@@ -318,7 +317,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		scbw(scb, kring, slot);
 		error = rx ? nm_os_stackmap_recv(na, slot) :
 			     nm_os_stackmap_send(na, slot);
-		if (error) {
+		if (unlikely(error)) {
 			D("early break");
 			break;
 		}
@@ -366,7 +365,6 @@ next_slot:
 			struct nm_bdg_fwd *ft_p = ft->ft + next;
 #endif
 			rs = &rxkring->ring->slot[j];
-			__builtin_prefetch(rs);
 #ifdef STACKMAP_FT_SCB
 			tmp.buf_idx = next;
 			scb = STACKMAP_CB_NMB(NMB(na, &tmp),
@@ -422,7 +420,8 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 				continue;
 			else if (stackmap_is_host(na))
 				continue;
-			KASSERT(nm_is_bwrap(na), "no bwrap attached!");
+			if (unlikely(!nm_is_bwrap(na)))
+				panic("no bwrap attached");
 
 			/* We assume the same number of hwna with vpna
 			 * (see netmap_bwrap_attach()) */
