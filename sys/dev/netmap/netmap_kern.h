@@ -1061,12 +1061,11 @@ struct stackmap_sk_adapter {
 	struct netmap_adapter *na;
 	void (*save_sk_data_ready)(NM_SOCK_T *);
 	void (*save_sk_destruct)(NM_SOCK_T *);
-	NM_LIST_ENTRY(stackmap_sk_adapter) next;
 };
 
 struct stackmap_adapter {
 	struct netmap_vp_adapter up;
-	NM_LIST_HEAD sk_adapters;
+	//NM_LIST_HEAD sk_adapters;
 	int (*save_reg)(struct netmap_adapter *na, int onoff);
 	uint32_t *extra_bufs;
 	struct netmap_slot *extra_slots;
@@ -1074,6 +1073,9 @@ struct stackmap_adapter {
 	char suffix[NETMAP_SUFFIX_LEN];	/* copy of nr_suffix in nmr */
 	void *save_sk_data_ready;
 	struct net_device_ops stackmap_ndo;
+	struct stackmap_sk_adapter **sk_adapters;
+#define DEFAULT_SK_ADAPTERS	65535
+	u_int sk_adapters_max;
 };
 
 /* to be embedded in the buf */

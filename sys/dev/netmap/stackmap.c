@@ -237,14 +237,10 @@ struct stackmap_sk_adapter *
 stackmap_ska_from_fd(struct netmap_adapter *na, int fd)
 {
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
-	struct stackmap_sk_adapter *ska, *tmp;
 
-	(void)tmp;
-	NM_LIST_FOREACH_SAFE(ska, &sna->sk_adapters, next, tmp) {
-		if (ska->fd == fd)
-			break;
-	}
-	return ska;
+	if (unlikely(fd >= sna->sk_adapters_max))
+		return NULL;
+	return sna->sk_adapters[fd];
 }
 
 static int
@@ -671,8 +667,12 @@ static void
 stackmap_unregister_socket(struct stackmap_sk_adapter *ska)
 {
 	NM_SOCK_T *sk = ska->sk;
+	struct stackmap_adapter *sna = (struct stackmap_adapter *)ska->na;
 
-	NM_LIST_DEL(ska, next);
+	if (ska->fd < sna->sk_adapters_max)
+		sna->sk_adapters[ska->fd] = NULL;
+	else
+		D("unregistering non-registered fd %d", ska->fd);
 	NM_SOCK_LOCK(sk);
 	RESTORE_DATA_READY(sk, ska);
 	RESTORE_DESTRUCTOR(sk, ska);
@@ -699,13 +699,31 @@ stackmap_sk_destruct(NM_SOCK_T *sk)
 	D("unregistered socket");
 }
 
-
 static int
 stackmap_register_fd(struct netmap_adapter *na, int fd)
 {
 	NM_SOCK_T *sk;
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
+
+	/* first check table size */
+	if (fd >= sna->sk_adapters_max) {
+		struct stackmap_sk_adapter **old = sna->sk_adapters, **new;
+		int oldsize = sna->sk_adapters_max;
+		int newsize = oldsize ? oldsize * 2 : DEFAULT_SK_ADAPTERS;
+
+		new = nm_os_malloc(sizeof(new) * newsize);
+		if (!new) {
+			D("failed to extend fd->sk_adapter table");
+			return ENOMEM;
+		}
+		if (old) {
+			memcpy(new, old, sizeof(old) * oldsize);
+			nm_os_free(old);
+		}
+		sna->sk_adapters = new;
+		sna->sk_adapters_max = newsize;
+	}
 
 	sk = nm_os_sock_fget(fd);
 	if (!sk)
@@ -724,7 +742,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	SET_DATA_READY(sk, nm_os_stackmap_data_ready);
 	SET_DESTRUCTOR(sk, stackmap_sk_destruct);
 	stackmap_wsk(ska, sk);
-	NM_LIST_ADD(&sna->sk_adapters, ska, next);
+	sna->sk_adapters[fd] = ska;
 
 	nm_os_sock_fput(sk);
 	D("registered fd %d sk %p ska %p", fd, sk, ska);
@@ -734,18 +752,20 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 static void
 stackmap_bdg_dtor(const struct netmap_vp_adapter *vpna)
 {
-	struct stackmap_adapter *tmp, *sna;
-	struct stackmap_sk_adapter *ska;
+	struct stackmap_adapter *sna;
+	int i;
 
 	if (&vpna->up != stackmap_master(&vpna->up))
 		return;
 
 	sna = (struct stackmap_adapter *)vpna;
-	/* XXX Is this safe to remove entry ? */
-	(void)tmp;
-	NM_LIST_FOREACH_SAFE(ska, &sna->sk_adapters, next, tmp) {
-		stackmap_unregister_socket(ska);
+	for (i = 0; i < sna->sk_adapters_max; i++) {
+		struct stackmap_sk_adapter *ska = sna->sk_adapters[i];
+		if (ska)
+			stackmap_unregister_socket(ska);
 	}
+	nm_os_free(sna->sk_adapters);
+	sna->sk_adapters_max = 0;
 }
 
 static int
@@ -818,6 +838,7 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 #endif /* STACKMAP_CB_TAIL */
 		D("virt_hdr_len %d", na->virt_hdr_len);
 		netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
+
 		return stackmap_reg_slaves(na);
 	}
 
@@ -864,7 +885,6 @@ stackmap_attach(struct netmap_adapter *arg, struct netmap_adapter **ret,
 	na->na_flags |= NAF_BDG_MBUF;
 	na->nm_rxsync = stackmap_rxsync;
 	strncpy(sna->suffix, suffix, sizeof(sna->suffix));
-	NM_LIST_INIT(&sna->sk_adapters);
 	netmap_bdg_wunlock(b);
 	ND("%s 0x%p (orig 0x%p) mem 0x%p master %d bwrap %d",
 	       	na->name, na, arg, na->nm_mem, master, !!nm_is_bwrap(na));
