@@ -2069,7 +2069,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 
 		if (extra->len) /* in use */
 			continue;
-		scb = STACKMAP_CB_NMB(NMB(na, slot));
+		scb = STACKMAP_CB_NMB(NMB(na, slot), NETMAP_BUF_SIZE(na));
 		scbw(scb, NULL, extra);
 
 		tmp = *extra;

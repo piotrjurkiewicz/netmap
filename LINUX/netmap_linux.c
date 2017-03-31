@@ -919,7 +919,7 @@ int
 nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 {
 	char *nmb = NMB(na, slot);
-	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb);
+	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	struct mbuf *m;
 
 	m = nm_os_build_mbuf(na, nmb, slot->len);
@@ -977,7 +977,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	get_page(page); // survive __kfree_skb()
 	poff = nmb - page_to_virt(page) + na->virt_hdr_len + slot->offset;
 	len = slot->len - na->virt_hdr_len - slot->offset;
-	scb = STACKMAP_CB_NMB(nmb);
+	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
 		(int)(slot - scb_kring(scb)->ring->slot), sk,

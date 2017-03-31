@@ -325,7 +325,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		__builtin_prefetch(nmb);
 		if (unlikely(slot->len == 0))
 			goto next_slot;
-		scb = STACKMAP_CB_NMB(nmb);
+		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		if (unlikely(host)) { // XXX no batch in host
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
@@ -608,7 +608,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			 * will be swapped in the second pass.
 			 */
 			slot->fd = STACKMAP_FD_HOST;
-			scb = STACKMAP_CB_NMB(nmb);
+			scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 			scbw(scb, kring, slot);
 			ND("host: buf %p off %d len %d type 0x%04x proto %u",
 				nmb, slot->offset, slot->len,
@@ -618,7 +618,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			goto next_slot;
 		}
 
-		scb = STACKMAP_CB_NMB(nmb);
+		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
 			/* This packet has been dropped */
 			ND(1, "%s slot %d nmb %p scb->flags 0x%04x type 0x%04x",
@@ -1257,9 +1257,12 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 
 		/* install config handler */
 		netmap_bdg_set_ops(sna->up.na_bdg, &ops);
-		//netmap_mem_set_buf_offset(na->nm_mem, STACKMAP_DMA_OFFSET);
+#ifdef STACKMAP_CB_TAIL
+		na->virt_hdr_len = STACKMAP_DMA_OFFSET;
+#else
 		na->virt_hdr_len = sizeof(struct stackmap_cb);
-		D("virt_hdr_len %d", sizeof(struct stackmap_cb));
+#endif /* STACKMAP_CB_TAIL */
+		D("virt_hdr_len %d", na->virt_hdr_len);
 		netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 		return stackmap_reg_slaves(na);
 	}

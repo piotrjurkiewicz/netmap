@@ -517,12 +517,22 @@ void netmap_bns_unregister(void);
 #define NM_SOCK_UNLOCK(_s)	release_sock(_s)
 
 /* STACKMAP_CB() is only valid for mbuf populated by nm_os_build_mbuf() */
+#define STACKMAP_CB_TAIL 1
+#ifdef STACKMAP_CB_TAIL
+#define STACKMAP_CB(_m) ((struct stackmap_cb *) \
+		       (((void *)skb_shinfo((_m))) + \
+		       SKB_DATA_ALIGN(sizeof(struct skb_shared_info))))
+#define STACKMAP_CB_NMB(_buf, _bufsiz) ((struct stackmap_cb *)                 \
+		((void *)(_buf) + ((_bufsiz) - sizeof(struct stackmap_cb))))
+#else
 #define STACKMAP_CB(_m) ((struct stackmap_cb *)(_m)->head)
-#define STACKMAP_CB_NMB(_buf) ((struct stackmap_cb *)(_buf))
+#define STACKMAP_CB_NMB(_buf, _bufsiz) ((struct stackmap_cb *)(_buf))
+#endif /* STACKMAP_CB_TAIL */
 #define STACKMAP_CB_FRAG(_m, _bufsiz) \
 	STACKMAP_CB_NMB(page_address(\
 		skb_frag_page(&skb_shinfo((_m))->frags[0])) + \
-		_bufsiz * (skb_shinfo((_m))->frags[0].page_offset / _bufsiz))
+		_bufsiz * (skb_shinfo((_m))->frags[0].page_offset / _bufsiz),\
+		_bufsiz)
 
 struct nm_ubuf_info {
 	struct ubuf_info ubuf;
