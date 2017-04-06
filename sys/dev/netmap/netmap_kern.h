@@ -1088,7 +1088,7 @@ struct stackmap_cb {
 	struct nm_ubuf_info ui; /* ctx keeps kring and desc keeps slot */
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
-#define SCB_M_PASSED	0x00000001
+#define SCB_M_NOREF	0x00000001
 #define SCB_M_STACK	0x00000002
 #define SCB_M_QUEUED	0x00000004
 	uint32_t flags;

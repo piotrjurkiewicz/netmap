@@ -67,8 +67,10 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_mode, CTLFLAG_RW, &stackmap_mode, 0 ,
 SYSEND;
 
 #define NM_RANGE(v, s, n, k)	\
-	(s + n < k->nkr_num_slots) ? (v >= s && v < s + n) : \
-	  ((v >= s && v < k->nkr_num_slots) || (v < s + n - k->nkr_num_slots))
+	(((int)s + n < (int)k->nkr_num_slots) ?\
+	 (v >= (int)s && v < (int)s + n) : \
+	  ((v >= (int)s && v < (int)k->nkr_num_slots) || \
+	   (v < (int)s + n - (int)k->nkr_num_slots)))
 
 static inline struct netmap_adapter *
 stackmap_master(const struct netmap_adapter *slave)
@@ -247,6 +249,18 @@ stackmap_ska_from_fd(struct netmap_adapter *na, int fd)
 	return sna->sk_adapters[fd];
 }
 
+static inline uint32_t
+stackmap_kr_rxspace(struct netmap_kring *k)
+{
+	int space;
+	int busy = k->nr_hwtail - k->nr_hwcur;
+
+	if (busy < 0)
+		busy += k->nkr_num_slots;
+	space = k->nkr_num_slots - 1 - busy;
+	return space;
+}
+
 static int
 stackmap_bdg_flush(struct netmap_kring *kring)
 {
@@ -287,9 +301,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	/* let the host stack packets go earlier */
 
-	if (na == stackmap_master(na) || host)
+	if (na == stackmap_master(na) || host) {
 		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
-	else {
+	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
 	}
@@ -304,27 +318,34 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 		if (unlikely(slot->len == 0))
 			continue;
+		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
+			RD(1, "skiping leftover slot %d", k);
+			continue;
+		}
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		__builtin_prefetch(scb);
 		if (unlikely(host)) { // XXX no batch in host
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
+			stackmap_cb_set_state(scb, SCB_M_NOREF);
 			stackmap_add_fdtable(scb, kring);
 			continue;
 		}
-		if (stackmap_cb_get_state(scb) == SCB_M_PASSED) {
-			D("M_PASSED, invalidate");
-			stackmap_cb_invalidate(scb);
-			continue;
-		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
+			/* hold by the stack and sits on this ring */
 			ND(1, "M_QUEUED, extra_enqueue");
-			if (stackmap_extra_enqueue(na, slot))
+			if (stackmap_extra_enqueue(na, slot)) {
 				break;
+			}
 			continue;
 		}
-		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
-			RD(1, "skiping leftover slot %d", k);
+		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
+		    stackmap_cb_get_state(scb) == SCB_M_STACK) {
+			/* leftover (leftover <= rhead - hwcur) */
+			if (unlikely(!NM_RANGE(k, kring->nr_hwcur,
+							leftover,kring))) {
+				RD(1, "weird, M_NOREF but not in leftover... (k %d hwcur %d leftover %d nslots %d)", k, kring->nr_hwcur, leftover, kring->nkr_num_slots);
+			}
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -332,9 +353,14 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(na, slot) :
 			     nm_os_stackmap_send(na, slot);
 		if (unlikely(error)) {
-			D("early break");
+			RD(1, "early break");
 			break;
 		}
+	}
+	if (rx) {
+		ND("rx %d packets", (rhead - (int)kring->nr_hwcur >= 0 ?
+		       	rhead - kring->nr_hwcur :
+			rhead + kring->nkr_num_slots - kring->nr_hwcur));
 	}
 
 	/* Now, we know how many packets go to the receiver
@@ -360,10 +386,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		mtx_unlock(&rxkring->q_lock);
 		goto unlock_out;
 	}
-	howmany = nm_kr_space(rxkring, 1);
+	howmany = stackmap_kr_rxspace(rxkring); // we don't use lease
 	if (ft->npkts < howmany)
 		howmany = ft->npkts;
 
+	/* TODO Apr.7: Swap out packets with references (i.e., M_STACK) */
 	for (n = 0; n < ft->nfds; n++) {
 #ifdef STACKMAP_FT_SCB
 		struct stackmap_bdg_q *bq;
@@ -379,21 +406,22 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			struct netmap_slot tmp, *ts, *rs;
 #ifdef STACKMAP_FT_SCB
 			struct stackmap_cb *scb;
-#else
-			struct nm_bdg_fwd *ft_p = ft->ft + next;
-#endif
-			rs = &rxkring->ring->slot[j];
-#ifdef STACKMAP_FT_SCB
+
 			tmp.buf_idx = next;
 			scb = STACKMAP_CB_NMB(NMB(na, &tmp),
 					      NETMAP_BUF_SIZE(na));
 			next = scb->next;
 			ts = scb_slot(scb);
 #else /* !STACKMAP_FT_SCB */
+			struct nm_bdg_fwd *ft_p = ft->ft + next;
 
 			next = ft_p->ft_next;
 			ts = ft_p->ft_slot;
-#endif
+#endif /* STACKMAP_FT_SCB */
+			if (stackmap_cb_get_state(scb) == SCB_M_NOREF)
+				stackmap_cb_invalidate(scb);
+			rs = &rxkring->ring->slot[j];
+
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
@@ -432,11 +460,10 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
-			if (kring->ring->slot[j].len > 0) { // not sent
+			if (kring->ring->slot[j].len > 0) // not sent
 				break;
-			}
 		}
-		RD(1, "%d leftovers (hwcur %d inuse %d head %d)",
+		ND(1, "%d leftovers (hwcur %d inuse %d head %d)",
 			ft->npkts, kring->nr_hwcur, j, rhead);
 		k = j;
 	}
@@ -452,10 +479,14 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)kring->na;
 	struct nm_bridge *b = sna->up.na_bdg;
 	u_int me = kring - NMR(kring->na, NR_RX);
-	int i;
+	int i, err;
 
 	/* TODO scan only necessary ports */
+	err = netmap_vp_rxsync(kring, flags); // reclaim buffers released
+	if (err)
+		return err;
 	if (stackmap_mode == NM_STACKMAP_PULL) {
+		ND("kr %p rhead %u hwcur %u tail %u lease %u nslots %u", kring, kring->rhead, kring->nr_hwcur, kring->nr_hwtail, kring->nkr_hwlease, kring->nkr_num_slots);
 		for_bdg_ports(i, b) {
 			struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 			struct netmap_adapter *na = &vpna->up;
@@ -477,7 +508,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			netmap_bwrap_intr_notify(hwkring, flags);
 		}
 	}
-	return netmap_vp_rxsync(kring, flags);
+	return 0;
 }
 
 static int
@@ -543,12 +574,16 @@ transmit:
 	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 	       	/* originated by netmap but has been queued in either extra
 		 * or txring slot. The backend might drop this packet
+		 * We don't need scb anymore.
 		 */
 		D("queued transmit scb %p", scb);
+#if 0
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
 		/* keep scb until the final reference goes away */
 		slot->len = slot->offset = slot->next = 0;
+#endif /* 0 */
+		stackmap_cb_invalidate(scb);
 		netmap_transmit(ifp, m);
 		return 0;
 	}
@@ -582,7 +617,6 @@ transmit:
 	nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
 	m_freem(m);
-	//stackmap_cb_set_state(scb, SCB_M_PASSED);
 	return 0;
 }
 

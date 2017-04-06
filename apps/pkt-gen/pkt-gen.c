@@ -3089,7 +3089,7 @@ main(int arc, char **argv)
 		}
 
 		sin->sin_family = AF_INET;
-		sin->sin_port = htons(50000);
+		sin->sin_port = htons(g.src_ip.port0);
 		sin->sin_addr.s_addr = htonl(g.src_ip.ipv4.start);
 		//sin->sin_addr.s_addr = INADDR_ANY;
 		if (bind(sfd, (struct sockaddr *)sin, sizeof(*sin))) {

@@ -813,7 +813,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 		panic("x");
 
 	scb = container_of(u, struct stackmap_cb, ui);
-	stackmap_cb_invalidate(scb);
+	stackmap_cb_set_state(scb, SCB_M_NOREF);
 	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
 }
 
@@ -912,8 +912,8 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 {
 	struct stackmap_cb *scb = STACKMAP_CB(m);
 
-	if (stackmap_cb_get_state(scb) != SCB_M_PASSED)
-		stackmap_cb_set_state(scb, SCB_M_PASSED);
+	if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
+		stackmap_cb_set_state(scb, SCB_M_NOREF);
 }
 
 /* scb must has been populated */
@@ -940,9 +940,11 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 
 	/* setting data destructor is only safe after skb_orphan_frag()
 	 * in __netif_receive_skb_core().  */
-	if (stackmap_cb_get_state(scb) != SCB_M_PASSED) {
+	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
+		/* mbuf alive (destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
+		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
 			RD(1, "no extra space for nmb %p slot %p scb %p",
