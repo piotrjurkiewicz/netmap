@@ -279,6 +279,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #ifdef STACKMAP_FT_SCB
 	int leftover;
 #endif
+	uint32_t m_stack[2048]; // slot index
+	u_int m_stack_cur = 0;
 
 	ft = stackmap_get_bdg_fwd(kring);
 #ifdef STACKMAP_FT_SCB
@@ -286,6 +288,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #else
 	ft->npkts = ft->nfds = 0;
 #endif
+
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -418,9 +421,13 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			next = ft_p->ft_next;
 			ts = ft_p->ft_slot;
 #endif /* STACKMAP_FT_SCB */
-			if (stackmap_cb_get_state(scb) == SCB_M_NOREF)
-				stackmap_cb_invalidate(scb);
 			rs = &rxkring->ring->slot[j];
+			if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
+				m_stack[m_stack_cur++] = j;
+				scbw(scb, rxkring, rs);
+			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
+				stackmap_cb_invalidate(scb);
+			}
 
 			tmp = *rs;
 			*rs = *ts;
@@ -457,6 +464,18 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	mtx_unlock(&rxkring->q_lock);
 
 	rxkring->nm_notify(rxkring, 0);
+
+	/*
+	 * All packets have been processed by the backend.
+	 * We now swap out those still hold by the stack (SCB_M_STACK)
+	 */
+	for (j = 0; j < m_stack_cur; j++) {
+		struct netmap_slot *slot = &rxkring->ring->slot[m_stack[j]];
+
+		if (stackmap_extra_enqueue(na, slot)) {
+			panic("enqueue failed");
+		}
+	}
 
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
