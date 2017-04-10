@@ -155,9 +155,11 @@ struct stackmap_bdgfwd {
 #ifdef STACKMAP_FT_SCB
 	uint16_t nfds;
 	uint16_t npkts;
-	struct stackmap_bdg_q fde[NM_BDG_BATCH_MAX*4]; /* XXX */
+	struct stackmap_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS
+	       	+ NM_BDG_BATCH_MAX]; /* XXX */
+	uint32_t tmp[NM_BDG_BATCH_MAX];
 #else
-	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX];
+	struct nm_bdg_fwd ft[NM_BDG_BATCH_MAX]; /* 16 byte each */
 	struct nm_bdg_q fde[NM_BDG_MAXPORTS * NM_BDG_MAXRINGS]; // 8 byte left
 	uint16_t nfds;
 	uint16_t npkts;
@@ -279,16 +281,16 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #ifdef STACKMAP_FT_SCB
 	int leftover;
 #endif
-	uint32_t m_stack[2048]; // slot index
-	u_int m_stack_cur = 0;
+	u_int nonfree_num = 0;
+	uint32_t *nonfree;
 
 	ft = stackmap_get_bdg_fwd(kring);
 #ifdef STACKMAP_FT_SCB
 	leftover = ft->npkts;
+	nonfree = ft->tmp;
 #else
 	ft->npkts = ft->nfds = 0;
 #endif
-
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
@@ -423,7 +425,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif /* STACKMAP_FT_SCB */
 			rs = &rxkring->ring->slot[j];
 			if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
-				m_stack[m_stack_cur++] = j;
+				nonfree[nonfree_num++] = j;
 				scbw(scb, rxkring, rs);
 			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
 				stackmap_cb_invalidate(scb);
@@ -469,8 +471,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	 * All packets have been processed by the backend.
 	 * We now swap out those still hold by the stack (SCB_M_STACK)
 	 */
-	for (j = 0; j < m_stack_cur; j++) {
-		struct netmap_slot *slot = &rxkring->ring->slot[m_stack[j]];
+	for (j = 0; j < nonfree_num; j++) {
+		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
 		if (stackmap_extra_enqueue(na, slot)) {
 			panic("enqueue failed");
@@ -554,6 +556,12 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	return 0;
 }
 
+#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
+#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
+#define NMTCPHDR(p)	((struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + 20))
+#define TCPFLAG(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
+				NMTCPHDR(p)->flags : 0)
+
 int
 stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 {
@@ -563,14 +571,15 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	ND("m %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u",
+	D("m %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x",
 		m, m->head, skb_headlen(m), skb_end_offset(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
 		skb_is_nonlinear(m) ?
 			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,
-		ntohs(*(uint16_t *)(m->data+12)),
-		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m));
+		ETHTYPE(m->data),
+		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),
+		TCPFLAG(m->data));
 
 	if (!skb_is_nonlinear(m)) {
 transmit:
@@ -611,7 +620,7 @@ transmit:
 
 	/* bring protocol headers in */
 	mismatch = slot->offset - MBUF_HEADLEN(m);
-	ND(1, "bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	D("bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* We need to copy only from head */

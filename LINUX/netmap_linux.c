@@ -916,6 +916,12 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 		stackmap_cb_set_state(scb, SCB_M_NOREF);
 }
 
+#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
+#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
+#define NMTCPHDR(p)	((struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + 20))
+#define TCPFLAG(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
+				NMTCPHDR(p)->flags : 0)
+
 /* scb must has been populated */
 int
 nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
@@ -935,6 +941,8 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	/* set mbuf destructor to detect this mbuf consumed */
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
 
+	D("m %p len %u (0x%04x) tcpflag 0x%02x", m, skb_headlen(m),
+			ETHTYPE(m->data-14), TCPFLAG(m->data-14));
 	/* pass the packet to the stack */
 	netif_receive_skb(m);
 
@@ -983,12 +991,16 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u",
+	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d",
 		(int)(slot - scb_kring(scb)->ring->slot), sk,
-		ska->fd, nmb, scb, scb->flags, poff);
+		ska->fd, nmb, scb, scb->flags, poff, len);
 
 	/* let the stack to manage the buffer */
+	//na->ifp->features |= NETIF_F_CSUM_MASK;
+	//sk->sk_route_caps |= NETIF_F_HW_CSUM;
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
+	//sk->sk_route_caps &= ~NETIF_F_HW_CSUM;
+	//na->ifp->features &= ~NETIF_F_CSUM_MASK;
 	if (unlikely(err < 0)) {
 		/* Treat as if this buffer is consumed and hope mbuf
 		 * has been freed.
@@ -1005,11 +1017,11 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
-			RD(1, "no extra space for nmb %p slot %p scb %p",
+			D("no extra space for nmb %p slot %p scb %p",
 				nmb, scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
+		D("enqueued nmb %p to now this slot is at %p scb %p",
 			nmb, scb_slot(scb), scb);
 	}
 	return 0;

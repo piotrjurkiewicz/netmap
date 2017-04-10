@@ -557,15 +557,14 @@ nm_set_mbuf_data_destructor(struct mbuf *m,
 static inline struct stackmap_sk_adapter *
 stackmap_sk(NM_SOCK_T *sk)
 {
-	uintptr_t p = *(uint64_t *)(uintptr_t)&sk->sk_cookie;
-	return (struct stackmap_sk_adapter *)p;
+	return (struct stackmap_sk_adapter *)sk->sk_user_data;
 }
 
  /* We overwrite sk->sk_cookie as it appear not to be used */
 static inline void
 stackmap_wsk(struct stackmap_sk_adapter *ska, NM_SOCK_T *sk)
 {
-	*(uint64_t *)(uintptr_t)&sk->sk_cookie = (uintptr_t)ska;
+	sk->sk_user_data = ska;
 }
 
 #define ETH_HDR_LEN	ETH_HLEN

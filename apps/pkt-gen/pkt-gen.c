@@ -1517,7 +1517,7 @@ sender_body(void *data)
 	    !strncmp(targ->g->ifname, "stack", 5)) {
 		pfd[0].events |= POLLIN; /* for ARP exchange on PULL mode */
 		if (targ->g->transport == IPPROTO_TCP)
-			targ->g->soff = 14+20+20;
+			targ->g->soff = 14+20+20+12; // tsopt
 		else /* UDP */
 			targ->g->soff = 14+20+8;
 	}
