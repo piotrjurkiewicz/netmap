@@ -571,8 +571,8 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	D("m %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x",
-		m, m->head, skb_headlen(m), skb_end_offset(m),
+	D("m %p sk %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x",
+		m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),
 		skb_is_nonlinear(m) ?
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
 		skb_is_nonlinear(m) ?
@@ -580,6 +580,27 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 		ETHTYPE(m->data),
 		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),
 		TCPFLAG(m->data));
+
+	if (!skb_is_nonlinear(m) && nm_os_mbuf_has_offld(m)) {
+		struct nm_iphdr *iph = (struct nm_iphdr *)skb_network_header(m);
+		struct nm_tcphdr *tcph =
+			(struct nm_tcphdr *)skb_transport_header(m);
+		uint16_t *check = &tcph->check;
+
+		/* With ethtool -K eth1 tx-checksum-ip-generic on,
+		 * we see ip_sum PARTIAL and HWCSUM and IP6CSUM on.
+		 */
+
+		D("hr %d skb_network_header %d skb_transport_header %d tlen %d HWCSUM %lx IPCSUM %lx IP6CSUM %lx",
+			skb_headroom(m), m->network_header, m->transport_header,
+			(int)(skb_tail_pointer(m) - skb_transport_header(m)),
+			ifp->features & NETIF_F_HW_CSUM,
+			ifp->features & NETIF_F_IP_CSUM,
+			ifp->features & NETIF_F_IPV6_CSUM);
+		*check = 0;
+		nm_os_csum_tcpudp_ipv4(iph, tcph, (size_t)(skb_tail_pointer(m) - skb_transport_header(m)), check);
+		m->ip_summed = 0;
+	}
 
 	if (!skb_is_nonlinear(m)) {
 transmit:
@@ -619,7 +640,7 @@ transmit:
 	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 
 	/* bring protocol headers in */
-	mismatch = slot->offset - MBUF_HEADLEN(m);
+	mismatch = (int)slot->offset - MBUF_HEADLEN(m);
 	D("bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
@@ -634,6 +655,24 @@ transmit:
 	} else {
 		RD(1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
+	}
+
+	if (nm_os_mbuf_has_offld(m)) {
+		struct nm_iphdr *iph;
+		struct nm_tcphdr *tcph;
+		uint16_t *check;
+		int len;
+
+		iph = (struct nm_iphdr *)((char *)
+			NMB(na, slot) + na->virt_hdr_len + skb_network_offset(m));
+		tcph = (struct nm_tcphdr *)((char *)
+			NMB(na, slot) + na->virt_hdr_len + skb_transport_offset(m));
+		check = &tcph->check;
+		*check = 0;
+		len = slot->len - na->virt_hdr_len - skb_transport_offset(m);
+		D("nmb %p iph %p iphoff %u tcph %p tcphoff %u tlen %d",
+			NMB(na, slot), iph, skb_network_offset(m), tcph, skb_transport_offset(m), len);
+		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 
 	stackmap_add_fdtable(scb, scb_kring(scb));
