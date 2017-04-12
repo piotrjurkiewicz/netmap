@@ -1091,6 +1091,7 @@ struct stackmap_cb {
 #define SCB_M_NOREF	0x00000001
 #define SCB_M_STACK	0x00000002
 #define SCB_M_QUEUED	0x00000004
+#define SCB_M_TXREF	0x00000008
 	uint32_t flags;
 	uint32_t next; // used only if STACKMAP_FT_SCB defined
 } __attribute__((__packed__)); /* 32 byte */

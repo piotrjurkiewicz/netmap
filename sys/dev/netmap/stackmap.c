@@ -424,7 +424,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			ts = ft_p->ft_slot;
 #endif /* STACKMAP_FT_SCB */
 			rs = &rxkring->ring->slot[j];
-			if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
+			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 				nonfree[nonfree_num++] = j;
 				scbw(scb, rxkring, rs);
 			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
@@ -459,6 +459,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
+		D("sent %d packets", sent);
 #endif
 	}
 
@@ -562,6 +563,18 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 #define TCPFLAG(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
 				NMTCPHDR(p)->flags : 0)
 
+#define PRINT_MBUF(m) do {\
+	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
+		skb_is_nonlinear(m) ?\
+			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
+		skb_is_nonlinear(m) ?\
+			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
+		ETHTYPE(m->data),\
+		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),\
+		TCPFLAG(m->data));\
+} while (0)
+
+/* XXX We need a better way to distinguish m originated from stack */
 int
 stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 {
@@ -571,50 +584,40 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	int mismatch;
 
 	/* this field has survived cloning */
-	D("m %p sk %p head %p len %u space %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x",
-		m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),
-		skb_is_nonlinear(m) ?
-			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,
-		skb_is_nonlinear(m) ?
-			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,
-		ETHTYPE(m->data),
-		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),
-		TCPFLAG(m->data));
 
-	if (!skb_is_nonlinear(m) && nm_os_mbuf_has_offld(m)) {
-		struct nm_iphdr *iph = (struct nm_iphdr *)skb_network_header(m);
-		struct nm_tcphdr *tcph =
-			(struct nm_tcphdr *)skb_transport_header(m);
-		uint16_t *check = &tcph->check;
-
-		/* With ethtool -K eth1 tx-checksum-ip-generic on,
-		 * we see ip_sum PARTIAL and HWCSUM and IP6CSUM on.
-		 */
-
-		D("hr %d skb_network_header %d skb_transport_header %d tlen %d HWCSUM %lx IPCSUM %lx IP6CSUM %lx",
-			skb_headroom(m), m->network_header, m->transport_header,
-			(int)(skb_tail_pointer(m) - skb_transport_header(m)),
-			ifp->features & NETIF_F_HW_CSUM,
-			ifp->features & NETIF_F_IP_CSUM,
-			ifp->features & NETIF_F_IPV6_CSUM);
-		*check = 0;
-		nm_os_csum_tcpudp_ipv4(iph, tcph, (size_t)(skb_tail_pointer(m) - skb_transport_header(m)), check);
-		m->ip_summed = 0;
-	}
+	PRINT_MBUF(m);
 
 	if (!skb_is_nonlinear(m)) {
-transmit:
+csum_transmit:
+	       	if (nm_os_mbuf_has_offld(m)) {
+			struct nm_iphdr *iph;
+			struct nm_tcphdr *tcph;
+			uint16_t *check;
+
+		       	iph = (struct nm_iphdr *)skb_network_header(m);
+			tcph = (struct nm_tcphdr *)skb_transport_header(m);
+			check = &tcph->check;
+
+			/* With ethtool -K eth1 tx-checksum-ip-generic on, we
+			 * see HWCSUM/IP6CSUM in dev and ip_sum PARTIAL on m.
+			 */
+			*check = 0;
+			nm_os_csum_tcpudp_ipv4(iph, tcph, skb_tail_pointer(m)
+					- skb_transport_header(m), check);
+			m->ip_summed = 0;
+		}
 		netmap_transmit(ifp, m);
 		return 0;
 	}
 
-	/* XXX We need a better way to distinguish m originated from stack */
 
 	/* Possibly from sendpage() context */
 	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
 	if (unlikely(!stackmap_cb_valid(scb))) {
-		D("m is nonlinear but not from our sendpage()");
-		goto transmit;
+		D("m is nonlinear but not from our sendpage() (need ofld %d)",
+				nm_os_mbuf_has_offld(m));
+		skb_linearize(m);
+		goto csum_transmit;
 	}
 
 	/* because of valid scb, this is our packet. */
@@ -625,32 +628,20 @@ transmit:
 		 * or txring slot. The backend might drop this packet
 		 * We don't need scb anymore.
 		 */
-		D("queued transmit scb %p", scb);
-#if 0
-		nm_set_mbuf_data_destructor(m, &scb->ui,
-			nm_os_stackmap_mbuf_data_destructor);
-		/* keep scb until the final reference goes away */
-		slot->len = slot->offset = slot->next = 0;
-#endif /* 0 */
+		D("queued transmit scb %p (need ofld %d", scb, nm_os_mbuf_has_offld(m));
 		stackmap_cb_invalidate(scb);
-		netmap_transmit(ifp, m);
-		return 0;
+		skb_linearize(m);
+		goto csum_transmit;
 	}
 
 	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 
 	/* bring protocol headers in */
 	mismatch = (int)slot->offset - MBUF_HEADLEN(m);
-	D("bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
+	ND("bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
 		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
-		/* We need to copy only from head */
-		ND("nmb %p frag %p (pageoff %d)", NMB(na, slot),
-			skb_frag_address(&skb_shinfo(m)->frags[0]),
-			skb_shinfo(m)->frags[0].page_offset);
-		/* We have already validated length */
-		//skb_copy_from_linear_data(m, NMB(na, slot) +
-		//na->virt_hdr_len, slot->offset);
+		/* Length is already validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
 		RD(1, "mismatch %d, copy entire data", mismatch);
@@ -663,15 +654,17 @@ transmit:
 		uint16_t *check;
 		int len;
 
-		iph = (struct nm_iphdr *)((char *)
-			NMB(na, slot) + na->virt_hdr_len + skb_network_offset(m));
-		tcph = (struct nm_tcphdr *)((char *)
-			NMB(na, slot) + na->virt_hdr_len + skb_transport_offset(m));
+		iph = (struct nm_iphdr *)
+			((char *)NMB(na, slot) +
+			 na->virt_hdr_len + skb_network_offset(m));
+		tcph = (struct nm_tcphdr *)
+			((char *)NMB(na, slot) +
+			 na->virt_hdr_len + skb_transport_offset(m));
 		check = &tcph->check;
 		*check = 0;
 		len = slot->len - na->virt_hdr_len - skb_transport_offset(m);
-		D("nmb %p iph %p iphoff %u tcph %p tcphoff %u tlen %d",
-			NMB(na, slot), iph, skb_network_offset(m), tcph, skb_transport_offset(m), len);
+		ND("nmb %p iphoff %u tcphoff %u tlen %d", NMB(na, slot),
+			skb_network_offset(m), skb_transport_offset(m), len);
 		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 
@@ -681,9 +674,11 @@ transmit:
 	 * or it might holds reference via clone
 	 */
 
+	stackmap_cb_set_state(scb, SCB_M_TXREF);
+
 	nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
-	m_freem(m);
+	m_freem(m); // UDP frees but TCP keeps reference
 	return 0;
 }
 
@@ -856,6 +851,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	NM_SOCK_T *sk;
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
+	int on = 1;
 
 	/* first check table size */
 	if (fd >= sna->sk_adapters_max) {
@@ -879,6 +875,11 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	sk = nm_os_sock_fget(fd);
 	if (!sk)
 		return EINVAL;
+	/* XXX just for the case and ignore fail ... */
+	if (kernel_setsockopt(sk->sk_socket, SOL_TCP, TCP_NODELAY,
+				(char *)&on, sizeof(on)) < 0) {
+		D("WARNING: failed setsockopt(TCP_NODELAY)");
+	}
 
 	ska = nm_os_malloc(sizeof(*ska));
 	if (!ska) {
@@ -894,6 +895,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	SET_DESTRUCTOR(sk, stackmap_sk_destruct);
 	stackmap_wsk(ska, sk);
 	sna->sk_adapters[fd] = ska;
+
 
 	nm_os_sock_fput(sk);
 	D("registered fd %d sk %p ska %p", fd, sk, ska);

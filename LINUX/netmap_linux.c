@@ -809,12 +809,11 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	struct stackmap_cb *scb;
 	struct nm_ubuf_info *u = (struct nm_ubuf_info *)uarg;
 
+	scb = container_of(u, struct stackmap_cb, ui);
 	if (!zerocopy_success) {
 		//panic("x");
-		D("!zerocopy_success");
+		D("!zerocopy_success (scb %p)", scb);
 	}
-
-	scb = container_of(u, struct stackmap_cb, ui);
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
 	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
 }
@@ -995,16 +994,12 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d",
-		(int)(slot - scb_kring(scb)->ring->slot), sk,
-		ska->fd, nmb, scb, scb->flags, poff, len);
+	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d csumcaps %lx",
+		(int)(slot - scb_kring(scb)->ring->slot), sk, ska->fd,
+		nmb, scb, scb->flags, poff, len, sk_check_csum_caps(sk));
 
 	/* let the stack to manage the buffer */
-	//na->ifp->features |= NETIF_F_CSUM_MASK;
-	//sk->sk_route_caps |= NETIF_F_HW_CSUM;
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
-	//sk->sk_route_caps &= ~NETIF_F_HW_CSUM;
-	//na->ifp->features &= ~NETIF_F_CSUM_MASK;
 	if (unlikely(err < 0)) {
 		/* Treat as if this buffer is consumed and hope mbuf
 		 * has been freed.
@@ -1017,7 +1012,6 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		stackmap_cb_invalidate(scb);
 	}
 
-	/* Didn't reach ndo_start_xmit() */
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
 		/*
 		 * XXX We have the case that the reference to the page
@@ -1040,6 +1034,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		D("enqueued nmb %p to now this slot is at %p scb %p",
 			nmb, scb_slot(scb), scb);
 	}
+	/* SCB_M_TXREF or SCB_M_NOREF */
 	return 0;
 }
 
