@@ -392,7 +392,24 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		goto unlock_out;
 	}
 	howmany = stackmap_kr_rxspace(rxkring); // we don't use lease
-	if (ft->npkts < howmany)
+	if (howmany < ft->npkts) {
+		/*
+		 * Reclaim completed buffers
+		 */
+		u_int i;
+
+		for (i = rxkring->nkr_hwlease; i != rxkring->nr_hwtail;
+		     i = nm_next(i, lim_rx)) {
+			struct netmap_slot *slot = &rxkring->ring->slot[i];
+			struct stackmap_cb *scb;
+
+			scb = STACKMAP_CB_NMB(NMB(rxna, slot),
+					NETMAP_BUF_SIZE(rxna));
+			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
+				break;
+		}
+		rxkring->nkr_hwlease = i;
+	} else if (ft->npkts < howmany)
 		howmany = ft->npkts;
 
 	/* TODO Apr.7: Swap out packets with references (i.e., M_STACK) */
@@ -459,7 +476,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
-		D("sent %d packets", sent);
+		if (sent > 1)
+			D("sent %d packets", sent);
 #endif
 	}
 
@@ -472,6 +490,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	 * All packets have been processed by nm_notify().
 	 * We now swap out those still hold by the stack (SCB_M_STACK)
 	 */
+	rxkring->nkr_hwlease = rxkring->nr_hwcur;
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
@@ -482,7 +501,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			 */
 
 			u_int me = slot - rxkring->ring->slot;
-			D("enqueue failed at %u", k);
+			rxkring->nkr_hwlease = me;
+			D("enqueue failed: hwtail %u hwlease %u",
+					rxkring->nr_hwtail, me);
 			break;
 		}
 	}
@@ -564,21 +585,17 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	return 0;
 }
 
-#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
-#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
-#define NMTCPHDR(p)	((struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + 20))
-#define TCPFLAG(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
-				NMTCPHDR(p)->flags : 0)
 
 #define PRINT_MBUF(m) do {\
-	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u tcpflag 0x%02x", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
+	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u ofld %d tcpflag 0x%02x", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
 		skb_is_nonlinear(m) ?\
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
 		skb_is_nonlinear(m) ?\
 			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
 		ETHTYPE(m->data),\
 		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),\
-		TCPFLAG(m->data));\
+		nm_os_mbuf_has_offld(m), TCPFLAG(m->data), TCPSEQ(m->data),\
+		TCPACK(m->data));\
 } while (0)
 
 /* XXX We need a better way to distinguish m originated from stack */
@@ -592,24 +609,34 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 
 	/* this field has survived cloning */
 
-	PRINT_MBUF(m);
+	/*
+	if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
+		PRINT_MBUF(m);
+		*/
 
 	if (!skb_is_nonlinear(m)) {
 csum_transmit:
 	       	if (nm_os_mbuf_has_offld(m)) {
 			struct nm_iphdr *iph;
-			struct nm_tcphdr *tcph;
+			char *th;
 			uint16_t *check;
 
 		       	iph = (struct nm_iphdr *)skb_network_header(m);
-			tcph = (struct nm_tcphdr *)skb_transport_header(m);
-			check = &tcph->check;
-
+			KASSERT(ntohs(iph->tot_len) >= 46,
+			    ("too small UDP packet %d", ntohs(iph->tot_len)));
+			th = skb_transport_header(m);
+			if (iph->protocol == IPPROTO_UDP) {
+				check = &((struct nm_udphdr *)th)->check;
+			} else if (iph->protocol == IPPROTO_TCP) {
+				check = &((struct nm_tcphdr *)th)->check;
+				D("tcpseq %u", ntohl(((struct nm_tcphdr *)th)->seq));
+			} else
+				panic("invalid protocol %u for offld", iph->protocol);
 			/* With ethtool -K eth1 tx-checksum-ip-generic on, we
 			 * see HWCSUM/IP6CSUM in dev and ip_sum PARTIAL on m.
 			 */
 			*check = 0;
-			nm_os_csum_tcpudp_ipv4(iph, tcph, skb_tail_pointer(m)
+			nm_os_csum_tcpudp_ipv4(iph, th, skb_tail_pointer(m)
 					- skb_transport_header(m), check);
 			m->ip_summed = 0;
 		}
@@ -621,8 +648,8 @@ csum_transmit:
 	/* Possibly from sendpage() context */
 	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
 	if (unlikely(!stackmap_cb_valid(scb))) {
-		D("m is nonlinear but not from our sendpage() (need ofld %d)",
-				nm_os_mbuf_has_offld(m));
+		D("m %p len %d scb %p is nonlinear but not from our sendpage() (need ofld %d) maybe rexmit",
+				m, m->len, scb, nm_os_mbuf_has_offld(m));
 		skb_linearize(m);
 		goto csum_transmit;
 	}
@@ -635,9 +662,13 @@ csum_transmit:
 		 * or txring slot. The backend might drop this packet
 		 * We don't need scb anymore.
 		 */
-		D("queued transmit scb %p (need ofld %d", scb, nm_os_mbuf_has_offld(m));
 		stackmap_cb_invalidate(scb);
 		skb_linearize(m);
+		D("queued xmit scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
+			skb_frag_address(&skb_shinfo(m)->frags[0]),
+			ETHTYPE(m->data), TCPFLAG(m->data), TCPSEQ(m->data),
+			TCPEND(m->data), TCPACK(m->data), NMIPHLEN(m->data),
+			NMTCPHLEN(m->data));
 		goto csum_transmit;
 	}
 

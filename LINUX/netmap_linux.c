@@ -917,12 +917,6 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 		stackmap_cb_set_state(scb, SCB_M_NOREF);
 }
 
-#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
-#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
-#define NMTCPHDR(p)	((struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + 20))
-#define TCPFLAG(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
-				NMTCPHDR(p)->flags : 0)
-
 /* scb must has been populated */
 int
 nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
@@ -942,8 +936,10 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	/* set mbuf destructor to detect this mbuf consumed */
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
 
-	D("m %p len %u (0x%04x) tcpflag 0x%02x", m, skb_headlen(m),
-			ETHTYPE(m->data-14), TCPFLAG(m->data-14));
+	D("m %p len %u eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", m,
+			skb_headlen(m), ETHTYPE(m->data-14),
+			TCPFLAG(m->data-14), TCPSEQ(m->data-14),
+			TCPEND(m->data-14), TCPACK(m->data-14), NMIPHLEN(m->data-14), NMTCPHLEN(m->data-14));
 	/* pass the packet to the stack */
 	netif_receive_skb(m);
 
@@ -956,12 +952,12 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
-			RD(1, "no extra space for nmb %p slot %p scb %p",
+			D("no extra space for nmb %p slot %p scb %p",
 					NMB(scb_kring(scb)->na, scb_slot(scb)),
 					scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		RD(1, "enqueued nmb %p to now this slot is at %p scb %p",
+		D("enqueued nmb %p to now this slot is at %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
 	} /* otherwise it has been consumed or sk_data_ready()-ed */
@@ -994,7 +990,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	D("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d csumcaps %lx",
+	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d csumcaps %lx",
 		(int)(slot - scb_kring(scb)->ring->slot), sk, ska->fd,
 		nmb, scb, scb->flags, poff, len, sk_check_csum_caps(sk));
 

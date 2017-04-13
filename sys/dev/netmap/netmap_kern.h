@@ -2052,6 +2052,18 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
+#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
+#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
+#define NMIPLEN(p)	(ntohs(NMIPHDR(p)->tot_len))
+#define NMIPHLEN(p)	((NMIPHDR(p)->version_ihl & 0x0F) << 2)
+#define NMTCPHDR(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? (struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + NMIPHLEN(p)) : NULL)
+#define NMTCPHLEN(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
+		(NMTCPHDR(p)->doff >> 4) * 4 : 0)
+#define TCPFLAG(p)	(NMTCPHDR(p) ? NMTCPHDR(p)->flags : 0)
+#define TCPSEQ(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->seq) : 0)
+#define TCPEND(p)	(NMTCPHDR(p) ? (ntohl(NMTCPHDR(p)->seq) + \
+		(NMIPLEN(p) - NMIPHLEN(p) - NMTCPHLEN(p))) : 0)
+#define TCPACK(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->ack_seq) : 0)
 //struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
 int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
 int nm_os_stackmap_send(struct netmap_adapter *, struct netmap_slot *);
