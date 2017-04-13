@@ -469,14 +469,21 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	rxkring->nm_notify(rxkring, 0);
 
 	/*
-	 * All packets have been processed by the backend.
+	 * All packets have been processed by nm_notify().
 	 * We now swap out those still hold by the stack (SCB_M_STACK)
 	 */
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
 		if (stackmap_extra_enqueue(na, slot)) {
-			panic("enqueue failed");
+			/* Prevent this and subsequent buffers from being 
+			 * reclaimed. Of course we cannot rollback hwcur.
+			 * Let's lease.
+			 */
+
+			u_int me = slot - rxkring->ring->slot;
+			D("enqueue failed at %u", k);
+			break;
 		}
 	}
 
