@@ -147,7 +147,9 @@ void	   netmap_mem_delete(struct netmap_mem_d *);
 struct netmap_mem_d* __netmap_mem_get(struct netmap_mem_d *, const char *, int);
 void __netmap_mem_put(struct netmap_mem_d *, const char *, int);
 struct netmap_mem_d* netmap_mem_find(nm_memid_t);
+#ifdef NETMAP_MEM_MAPPING
 int netmap_mem_set_buf_offset(struct netmap_mem_d *, u_int);
+#endif /* NETMAP_MEM_MAPPING */
 
 #ifdef WITH_EXTMEM
 struct netmap_mem_d* netmap_mem_ext_create(struct nmreq *, int *);

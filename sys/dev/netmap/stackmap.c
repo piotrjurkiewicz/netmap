@@ -1028,7 +1028,9 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 		na->virt_hdr_len = sizeof(struct stackmap_cb);
 #endif /* STACKMAP_CB_TAIL */
 		D("virt_hdr_len %d", na->virt_hdr_len);
-		netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
+#ifdef NETMAP_MEM_MAPPING
+		//netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
+#endif /* NETMAP_MEM_MAPPING */
 
 		return stackmap_reg_slaves(na);
 	}

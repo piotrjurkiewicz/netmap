@@ -1385,6 +1385,7 @@ netmap_mem_reset_all(struct netmap_mem_d *nmd)
 	nmd->flags  &= ~NETMAP_MEM_FINALIZED;
 }
 
+#ifdef NETMAP_MEM_MAPPING
 int
 netmap_mem_set_buf_offset(struct netmap_mem_d *nmd, u_int len)
 {
@@ -1393,6 +1394,7 @@ netmap_mem_set_buf_offset(struct netmap_mem_d *nmd, u_int len)
 	nmd->flags |= (len << NETMAP_MEM_OFF_SHIFT);
 	return 0;
 }
+#endif /* NETMAP_MEM_MAPPING */
 
 static inline u_int netmap_mem_pdev_offset(struct netmap_mem_d *nmd)
 {
@@ -1434,7 +1436,9 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 	D("unsupported on Windows");
 #else /* linux */
 	int i, lim = p->_objtotal;
+#ifdef NETMAP_MEM_MAPPING
 	u_int o;
+#endif
 
 	if (na->pdev == NULL)
 		return 0;
@@ -1443,6 +1447,7 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 		netmap_load_map(na, (bus_dma_tag_t) na->pdev, &p->lut[i].paddr,
 				p->lut[i].vaddr);
 	}
+#ifdef NETMAP_MEM_MAPPING
 	/* XXX: below is for Stackmap and ugly workaround to remap DMA.
 	 * Note that this is because netmap_load_map() is void as it is
 	 * needed only for special case (e.g., IOMMU or Xen) */
@@ -1455,6 +1460,7 @@ netmap_mem_map(struct netmap_obj_pool *p, struct netmap_adapter *na)
 				(uint8_t *)p->lut[i].vaddr + o);
 		}
 	}
+#endif /* NETMAP_MEM_MAPPING */
 #endif /* linux */
 
 	return 0;
