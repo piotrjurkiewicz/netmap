@@ -1838,7 +1838,7 @@ static void *
 receiver_body(void *data)
 {
 	struct targ *targ = (struct targ *) data;
-	struct pollfd pfd = { .fd = targ->fd, .events = POLLIN };
+	struct pollfd pfd[2] = {{ .fd = targ->fd, .events = POLLIN }};
 	struct netmap_if *nifp;
 	struct netmap_ring *rxring;
 	int i;
@@ -1849,23 +1849,68 @@ receiver_body(void *data)
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
 
+	if (targ->g->sfd) {
+		int on = 1, err;
+		int lfd = targ->g->sfd;
+
+		pfd[1].fd = lfd;
+		pfd[1].events |= POLLOUT;
+		ioctl(lfd, FIONBIO, &on);
+		err = listen(lfd, 0);
+		if (err) {
+			perror("listen");
+			close(lfd);
+			goto quit;
+		}
+	}
+
 	D("reading from %s fd %d main_fd %d",
 		targ->g->ifname, targ->fd, targ->g->main_fd);
 	/* unbounded wait for the first packet. */
 	for (;!targ->cancel;) {
-		i = poll(&pfd, 1, 1000);
-		if (i > 0 && !(pfd.revents & POLLERR))
+		i = poll(pfd, pfd[1].fd ? 2 : 1, 1000);
+		if (pfd[1].fd) {
+			int newfd;
+			struct nm_ifreq ifreq;
+			char *p;
+			struct glob_arg *g = targ->g;
+
+			if (!(pfd[1].revents & POLLIN)) {
+				D("not accept yet");
+				continue;
+			}
+
+			newfd = accept(pfd[1].fd, (struct sockaddr *)
+			    g->nmsg.nmsg_name, &g->nmsg.nmsg_namelen);
+			if (newfd < 0) {
+				perror("accept");
+				goto quit;
+			}
+			bzero(&ifreq, sizeof(ifreq));
+			p = index(g->ifname, '+');
+			strncpy(ifreq.nifr_name, g->ifname, p ?  p - g->ifname :
+				(int)strlen(g->ifname));
+			memcpy(ifreq.data, &newfd, sizeof(newfd));
+			if (ioctl(g->nmd->fd, NIOCCONFIG, &ifreq)) {
+				perror("ioctl");
+				close(newfd);
+				close(pfd[1].fd);
+				goto quit;
+			}
+			// maybe drain received data?
+		}
+		if (i > 0 && !(pfd[0].revents & POLLERR))
 			break;
 		if (i < 0) {
 			D("poll() error: %s", strerror(errno));
 			goto quit;
 		}
-		if (pfd.revents & POLLERR) {
+		if (pfd[0].revents & POLLERR) {
 			D("fd error");
 			goto quit;
 		}
 		RD(1, "waiting for initial packets, poll returns %d %d",
-			i, pfd.revents);
+			i, pfd[0].revents);
 	}
 	/* main loop, exit after 1s silence */
 	clock_gettime(CLOCK_REALTIME_PRECISE, &targ->tic);
@@ -1886,7 +1931,7 @@ receiver_body(void *data)
 	while (!targ->cancel) {
 		char buf[MAX_BODYSIZE];
 
-		if (poll(&pfd, 1, 1 * 1000) <= 0 && !targ->g->forever) {
+		if (poll(pfd, 1, 1 * 1000) <= 0 && !targ->g->forever) {
 			clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
 			targ->toc.tv_sec -= 1; /* Subtract timeout time. */
 			/* XXX to avoid using 'goto out' */
@@ -1894,7 +1939,7 @@ receiver_body(void *data)
 			targ->ctr = cur;
 			goto quit;
 		}
-		if (pfd.revents & POLLERR) {
+		if (pfd[0].revents & POLLERR) {
 			D("poll err");
 			goto quit;
 		}
@@ -1923,19 +1968,20 @@ receiver_body(void *data)
 		/* Once we started to receive packets, wait at most 1 seconds
 		   before quitting. */
 #ifdef BUSYWAIT
-		if (ioctl(pfd.fd, NIOCRXSYNC, NULL) < 0) {
+		if (ioctl(pfd[0].fd, NIOCRXSYNC, NULL) < 0) {
 			D("ioctl error on queue %d: %s", targ->me,
 					strerror(errno));
 			goto quit;
 		}
 #else /* !BUSYWAIT */
-		if (poll(&pfd, 1, 1 * 1000) <= 0 && !targ->g->forever) {
+		if (poll(pfd, pfd[1].fd ? 2 : 1,
+		    1 * 1000) <= 0 && !targ->g->forever) {
 			clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
 			targ->toc.tv_sec -= 1; /* Subtract timeout time. */
 			goto out;
 		}
 
-		if (pfd.revents & POLLERR) {
+		if (pfd[0].revents & POLLERR) {
 			D("poll err");
 			goto quit;
 		}
@@ -3119,15 +3165,6 @@ main(int arc, char **argv)
 		/* We defer connect() so that the stack can process control 
 		 * packets on pull mode.
 		 */
-		/* Kill following lines to test non-connec()ed case */
-#if 0
-		if (connect(sfd, (struct sockaddr *)sin, sizeof(*sin))) {
-			perror("connect");
-			close(sfd);
-			goto out;
-		}
-		g.nmsg.nmsg_namelen = 0;
-#endif /* 0 */
 	}
 
 	g.main_fd = g.nmd->fd;
