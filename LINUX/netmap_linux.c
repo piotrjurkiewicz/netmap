@@ -946,7 +946,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	/* setting data destructor is only safe after skb_orphan_frag()
 	 * in __netif_receive_skb_core().  */
 	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
-		/* mbuf alive (destructor hasn't invoked) */
+		/* mbuf alive (our destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore

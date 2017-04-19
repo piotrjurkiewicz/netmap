@@ -123,20 +123,6 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 	return NM_IRQ_COMPLETED;
 }
 
-/* Stackmap version of the flush routine.
- * We ask the stack to identify destination NIC.
- * Packets are moved around by buffer swapping
- * Unsent packets throttle the source ring
- * Packets are re-iterated after dst->notify, 
- * TODO currently just forward all the packets
- * TODO consider if we can merge this with the original flush routine.
- */
-enum {
-	NM_STACK_CONSUMED=0,
-	NM_STACK_DEFERRED,
-	NM_STACK_CONSUMED_RESERVING,
-};
-
 /*
  * We need to form lists using scb and buf_idx, because they
  * can be very long due to ofo packets that have been queued
@@ -277,7 +263,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	int32_t n, lim_rx, howmany;
 	u_int dring;
 	struct netmap_kring *rxkring;
-	bool rx = 0, host = stackmap_is_host(na); // shorthands
+	bool rx = 0, host = stackmap_is_host(na);
 #ifdef STACKMAP_FT_SCB
 	int leftover;
 #endif
@@ -324,12 +310,12 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (unlikely(slot->len == 0))
 			continue;
 		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
-			RD(1, "skiping leftover slot %d", k);
+			RD(1, "skipping leftover slot %d", k);
 			continue;
 		}
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		__builtin_prefetch(scb);
-		if (unlikely(host)) { // XXX no batch in host
+		if (unlikely(host)) { // XXX host doesn't batch
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
 			stackmap_cb_set_state(scb, SCB_M_NOREF);
@@ -347,10 +333,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_STACK) {
 			/* leftover (leftover <= rhead - hwcur) */
-			if (unlikely(!NM_RANGE(k, kring->nr_hwcur,
-							leftover,kring))) {
-				RD(1, "weird, M_NOREF but not in leftover... (k %d hwcur %d leftover %d nslots %d)", k, kring->nr_hwcur, leftover, kring->nkr_num_slots);
-			}
+			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover, kring),
+				"M_NOREF or STACK not in leftover\n");
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -394,12 +378,12 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	howmany = stackmap_kr_rxspace(rxkring); // we don't use lease
 	if (howmany < ft->npkts) {
 		/*
-		 * Reclaim completed buffers
+		 * Want more buffers, reclaim completed ones
 		 */
 		u_int i;
 
-		for (i = rxkring->nkr_hwlease; i != rxkring->nr_hwtail;
-		     i = nm_next(i, lim_rx)) {
+		for (i = rxkring->nkr_hwlease, n = 0; i != rxkring->nr_hwtail;
+		     i = nm_next(i, lim_rx), n++) {
 			struct netmap_slot *slot = &rxkring->ring->slot[i];
 			struct stackmap_cb *scb;
 
@@ -408,11 +392,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
 				break;
 		}
+		howmany += n;
 		rxkring->nkr_hwlease = i;
 	} else if (ft->npkts < howmany)
 		howmany = ft->npkts;
 
-	/* TODO Apr.7: Swap out packets with references (i.e., M_STACK) */
 	for (n = 0; n < ft->nfds; n++) {
 #ifdef STACKMAP_FT_SCB
 		struct stackmap_bdg_q *bq;
@@ -476,8 +460,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
-		if (sent > 1)
-			D("sent %d packets", sent);
+		if (host) {
+			RD(1, "sent  %d packets from host", sent);
+		}
 #endif
 	}
 
@@ -577,9 +562,6 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	       	stackmap_bdg_flush(kring) : stackmap_bdg_rx(kring);
 		*/
 	done = stackmap_bdg_flush(kring);
-	/* debug to drain everything */
-	//kring->nr_hwcur = head;
-	//kring->nr_hwtail = nm_prev(head, kring->nkr_num_slots - 1);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
 	return 0;
@@ -716,7 +698,7 @@ csum_transmit:
 
 	nm_set_mbuf_data_destructor(m, &scb->ui,
 			nm_os_stackmap_mbuf_data_destructor);
-	m_freem(m); // UDP frees but TCP keeps reference
+	m_freem(m); // UDP usually frees reference but TCP holds it
 	return 0;
 }
 

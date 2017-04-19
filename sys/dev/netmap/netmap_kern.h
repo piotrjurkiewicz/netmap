@@ -1084,14 +1084,16 @@ struct stackmap_adapter {
  * We have budget of 40 byte for each of msghdr and cb
  * after 1520 data+headroom
  */
+enum {
+	SCB_M_STACK=0,
+	SCB_M_QUEUED,
+	SCB_M_TXREF,
+	SCB_M_NOREF,
+};
 struct stackmap_cb {
 	struct nm_ubuf_info ui; /* ctx keeps kring and desc keeps slot */
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
-#define SCB_M_NOREF	0x00000001
-#define SCB_M_STACK	0x00000002
-#define SCB_M_QUEUED	0x00000004
-#define SCB_M_TXREF	0x00000008
 	uint32_t flags;
 	uint32_t next; // used only if STACKMAP_FT_SCB defined
 } __attribute__((__packed__)); /* 32 byte */
