@@ -1085,7 +1085,7 @@ struct stackmap_adapter {
  * after 1520 data+headroom
  */
 enum {
-	SCB_M_STACK=0,
+	SCB_M_STACK=1,
 	SCB_M_QUEUED,
 	SCB_M_TXREF,
 	SCB_M_NOREF,
@@ -1113,7 +1113,7 @@ stackmap_cb_invalidate(struct stackmap_cb *scb)
 static inline int
 stackmap_cb_valid(struct stackmap_cb *scb)
 {
-	return (scb->flags & SCB_M_MAGIC);
+	return ((scb->flags & SCB_M_MAGIC_MASK) == SCB_M_MAGIC);
 }
 
 static inline int

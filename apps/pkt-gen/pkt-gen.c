@@ -1849,12 +1849,12 @@ receiver_body(void *data)
 	if (setaffinity(targ->thread, targ->affinity))
 		goto quit;
 
-	if (targ->g->sfd) {
+	if (targ->g->sfd && targ->g->transport == IPPROTO_TCP) {
 		int on = 1, err;
 		int lfd = targ->g->sfd;
 
 		pfd[1].fd = lfd;
-		pfd[1].events |= POLLOUT;
+		pfd[1].events |= POLLIN;
 		ioctl(lfd, FIONBIO, &on);
 		err = listen(lfd, 0);
 		if (err) {
@@ -1876,7 +1876,7 @@ receiver_body(void *data)
 			struct glob_arg *g = targ->g;
 
 			if (!(pfd[1].revents & POLLIN)) {
-				D("not accept yet");
+				RD(1, "not accept yet");
 				continue;
 			}
 
@@ -1897,6 +1897,7 @@ receiver_body(void *data)
 				close(pfd[1].fd);
 				goto quit;
 			}
+			D("accepted and registered");
 			// maybe drain received data?
 		}
 		if (i > 0 && !(pfd[0].revents & POLLERR))
@@ -3116,9 +3117,7 @@ main(int arc, char **argv)
 	if (!strncmp(g.ifname, "stack", 5)) {
 		struct sockaddr_storage ss;
 		struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
-		struct nm_ifreq ifreq;
 		int on = 1;
-		char *p;
 
 		if (g.transport == IPPROTO_UDP)
 			sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -3144,15 +3143,20 @@ main(int arc, char **argv)
 			goto out;
 		}
 
-		bzero(&ifreq, sizeof(ifreq));
-		p = index(g.ifname, '+');
-		strncpy(ifreq.nifr_name, g.ifname,
-		    p ? p - g.ifname : (int)strlen(g.ifname));
-		memcpy(ifreq.data, &sfd, sizeof(sfd));
-		if (ioctl(g.nmd->fd, NIOCCONFIG, &ifreq)) {
-			perror("ioctl");
-			close(sfd);
-			goto out;
+		if (g.td_body != receiver_body) {
+			struct nm_ifreq ifreq;
+			char *p;
+
+			bzero(&ifreq, sizeof(ifreq));
+			p = index(g.ifname, '+');
+			strncpy(ifreq.nifr_name, g.ifname,
+			    p ? p - g.ifname : (int)strlen(g.ifname));
+			memcpy(ifreq.data, &sfd, sizeof(sfd));
+			if (ioctl(g.nmd->fd, NIOCCONFIG, &ifreq)) {
+				perror("ioctl");
+				close(sfd);
+				goto out;
+			}
 		}
 		g.sfd = sfd;
 

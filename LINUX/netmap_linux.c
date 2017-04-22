@@ -936,7 +936,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	/* set mbuf destructor to detect this mbuf consumed */
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
 
-	D("m %p len %u eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", m,
+	ND("m %p len %u eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", m,
 			skb_headlen(m), ETHTYPE(m->data-14),
 			TCPFLAG(m->data-14), TCPSEQ(m->data-14),
 			TCPEND(m->data-14), TCPACK(m->data-14), NMIPHLEN(m->data-14), NMTCPHLEN(m->data-14));

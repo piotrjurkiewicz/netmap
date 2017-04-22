@@ -333,8 +333,10 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_STACK) {
 			/* leftover (leftover <= rhead - hwcur) */
-			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover, kring),
-				"M_NOREF or STACK not in leftover\n");
+			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover,
+						kring),
+			    ("M_NOREF or STACK not in leftover 0x%x\n",
+			     scb->flags));
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -460,9 +462,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
-		if (host) {
-			RD(1, "sent  %d packets from host", sent);
-		}
 #endif
 	}
 
@@ -569,7 +568,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 
 
 #define PRINT_MBUF(m) do {\
-	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u ofld %d tcpflag 0x%02x", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
+	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u ofld %d tcpflag 0x%02x tcpseq %u tcpack %u", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
 		skb_is_nonlinear(m) ?\
 			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
 		skb_is_nonlinear(m) ?\
@@ -591,10 +590,8 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 
 	/* this field has survived cloning */
 
-	/*
-	if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
-		PRINT_MBUF(m);
-		*/
+	//if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
+	//	PRINT_MBUF(m);
 
 	if (!skb_is_nonlinear(m)) {
 csum_transmit:
@@ -611,9 +608,9 @@ csum_transmit:
 				check = &((struct nm_udphdr *)th)->check;
 			} else if (iph->protocol == IPPROTO_TCP) {
 				check = &((struct nm_tcphdr *)th)->check;
-				D("tcpseq %u", ntohl(((struct nm_tcphdr *)th)->seq));
-			} else
+			} else {
 				panic("invalid protocol %u for offld", iph->protocol);
+			}
 			/* With ethtool -K eth1 tx-checksum-ip-generic on, we
 			 * see HWCSUM/IP6CSUM in dev and ip_sum PARTIAL on m.
 			 */
@@ -845,7 +842,7 @@ stackmap_unregister_socket(struct stackmap_sk_adapter *ska)
 	stackmap_wsk(NULL, sk);
 	NM_SOCK_UNLOCK(sk);
 	nm_os_free(ska);
-	D("unregistered fd %d", ska->fd);
+	D("unregistered fd %d sk %p", ska->fd, sk);
 }
 
 static void
@@ -855,6 +852,7 @@ stackmap_sk_destruct(NM_SOCK_T *sk)
 	struct stackmap_adapter *sna;
 
 	ska = stackmap_sk(sk);
+	D("sk %p ska %p", sk, ska);
 	if (ska->save_sk_destruct) {
 		ska->save_sk_destruct(sk);
 	}
@@ -906,8 +904,10 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		nm_os_sock_fput(sk);
 		return ENOMEM;
 	}
-	SAVE_DATA_READY(sk, ska);
-	SAVE_DESTRUCTOR(sk, ska);
+	if (sk->sk_data_ready != nm_os_stackmap_data_ready)
+		SAVE_DATA_READY(sk, ska);
+	if (sk->sk_destruct != stackmap_sk_destruct)
+		SAVE_DESTRUCTOR(sk, ska);
 	ska->na = na;
 	ska->sk = sk;
 	ska->fd = fd;
