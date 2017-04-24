@@ -585,4 +585,8 @@ stackmap_wsk(struct stackmap_sk_adapter *ska, NM_SOCK_T *sk)
 #define SET_DESTRUCTOR(sk, f) \
 	(sk)->sk_destruct = (void *)f
 #define MBUF_HEADLEN(m)		skb_headlen(m) /* m->pkthdr.len in FreeBSD */
+#define MBUF_NETWORK_HEADER(m)		(void *)skb_network_header(m)
+#define MBUF_TRANSPORT_HEADER(m)	(void *)skb_transport_header(m)
+#define MBUF_NONLINEAR(m)		skb_is_nonlinear(m)
+#define MBUF_LINEARIZE(m)		skb_linearize(m)
 #endif /* NETMAP_BSD_GLUE_H */

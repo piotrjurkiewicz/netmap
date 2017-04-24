@@ -3143,7 +3143,9 @@ main(int arc, char **argv)
 			goto out;
 		}
 
-		if (g.td_body != receiver_body) {
+		/* Don't register TCP listen socket */
+		if (!(g.transport == IPPROTO_TCP &&
+		      g.td_body == receiver_body)) {
 			struct nm_ifreq ifreq;
 			char *p;
 

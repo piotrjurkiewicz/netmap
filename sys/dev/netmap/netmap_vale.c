@@ -2548,6 +2548,7 @@ netmap_bwrap_notify(struct netmap_kring *kring, int flags)
 		return ENXIO;
 	}
 
+	D("before: rhead %u hwcur %u hwtail %u", kring->rhead, kring->nr_hwcur, kring->nr_hwtail);
 	/* first step: simulate a user wakeup on the rx ring */
 	netmap_vp_rxsync(kring, flags);
 	ND("%s[%d] PRE rx(c%3d t%3d l%3d) ring(h%3d c%3d t%3d) tx(c%3d ht%3d t%3d)",
@@ -2577,6 +2578,7 @@ netmap_bwrap_notify(struct netmap_kring *kring, int flags)
 put_out:
 	nm_kr_put(hw_kring);
 
+	D("after: rhead %u hwcur %u hwtail %u", kring->rhead, kring->nr_hwcur, kring->nr_hwtail);
 	return error ? error : NM_IRQ_COMPLETED;
 }
 

@@ -105,6 +105,11 @@
 #define MBUF_TXQ(m)	((m)->m_pkthdr.flowid)
 #define MBUF_TRANSMIT(na, ifp, m)	((na)->if_transmit(ifp, m))
 #define	GEN_TX_MBUF_IFP(m)	((m)->m_pkthdr.rcvif)
+#define MBUF_NETWORK_HEADER(m)		mtodo((m), (m)->m_pkthdr.l2hlen)
+#define MBUF_TRANSPORT_HEADER(m)	mtodo((m),(m)->m_pkthdr.l2hlen + \
+				 	      (m)->m_pkthdr.l3hlen)
+#define MBUF_NONLINEAR(m)		(!!(m->m_flags & M_EXT))
+#define MBUF_LINEARIZE(m)		// XXX
 
 #define NM_ATOMIC_T	volatile int /* required by atomic/bitops.h */
 /* atomic operations */

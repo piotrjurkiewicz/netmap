@@ -309,6 +309,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 		if (unlikely(slot->len == 0))
 			continue;
+		/* AT LEAST these are leftover */
 		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
 			RD(1, "skipping leftover slot %d", k);
 			continue;
@@ -330,13 +331,20 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			}
 			continue;
 		}
+		/* M_NOREF has two cases: leftover and just consumed.
+		 * The first case must be just skipped and latter case
+		 * is ready to reuse
+		 */
 		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_STACK) {
 			/* leftover (leftover <= rhead - hwcur) */
+			/*
 			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover,
 						kring),
 			    ("M_NOREF or STACK not in leftover 0x%x\n",
 			     scb->flags));
+			     */
+			ND("state 0x%x continue", stackmap_cb_get_state(scb));
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -384,6 +392,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 */
 		u_int i;
 
+		RD(1, "want more: hwlease %u hwtail %u", rxkring->nkr_hwlease, rxkring->nr_hwtail);
 		for (i = rxkring->nkr_hwlease, n = 0; i != rxkring->nr_hwtail;
 		     i = nm_next(i, lim_rx), n++) {
 			struct netmap_slot *slot = &rxkring->ring->slot[i];
@@ -433,7 +442,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
 				stackmap_cb_invalidate(scb);
 			}
-
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
@@ -520,7 +528,10 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 	if (err)
 		return err;
 	if (stackmap_mode == NM_STACKMAP_PULL) {
-		ND("kr %p rhead %u hwcur %u tail %u lease %u nslots %u", kring, kring->rhead, kring->nr_hwcur, kring->nr_hwtail, kring->nkr_hwlease, kring->nkr_num_slots);
+		ND("kr %p rhead %u hwcur %u tail %u lease %u nslots %u",
+				kring, kring->rhead, kring->nr_hwcur,
+				kring->nr_hwtail, kring->nkr_hwlease,
+				kring->nkr_num_slots);
 		for_bdg_ports(i, b) {
 			struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 			struct netmap_adapter *na = &vpna->up;
@@ -593,17 +604,17 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	//if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
 	//	PRINT_MBUF(m);
 
-	if (!skb_is_nonlinear(m)) {
+	if (!MBUF_NONLINEAR(m)) {
 csum_transmit:
 	       	if (nm_os_mbuf_has_offld(m)) {
 			struct nm_iphdr *iph;
 			char *th;
 			uint16_t *check;
 
-		       	iph = (struct nm_iphdr *)skb_network_header(m);
+			iph = MBUF_NETWORK_HEADER(m);
 			KASSERT(ntohs(iph->tot_len) >= 46,
 			    ("too small UDP packet %d", ntohs(iph->tot_len)));
-			th = skb_transport_header(m);
+			th = MBUF_TRANSPORT_HEADER(m);
 			if (iph->protocol == IPPROTO_UDP) {
 				check = &((struct nm_udphdr *)th)->check;
 			} else if (iph->protocol == IPPROTO_TCP) {
@@ -642,7 +653,7 @@ csum_transmit:
 		 * We don't need scb anymore.
 		 */
 		stackmap_cb_invalidate(scb);
-		skb_linearize(m);
+		MBUF_LINEARIZE(m);
 		D("queued xmit scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
 			skb_frag_address(&skb_shinfo(m)->frags[0]),
 			ETHTYPE(m->data), TCPFLAG(m->data), TCPSEQ(m->data),
