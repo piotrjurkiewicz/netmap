@@ -241,7 +241,7 @@ static inline uint32_t
 stackmap_kr_rxspace(struct netmap_kring *k)
 {
 	int space;
-	int busy = k->nr_hwtail - k->nr_hwcur;
+	int busy = k->nr_hwtail - k->nkr_hwlease;
 
 	if (busy < 0)
 		busy += k->nkr_num_slots;
@@ -309,7 +309,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 		if (unlikely(slot->len == 0))
 			continue;
-		/* AT LEAST these are leftover */
+		/* AT LEAST these are leftover XXX don't go through */
 		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
 			RD(1, "skipping leftover slot %d", k);
 			continue;
@@ -336,7 +336,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 * is ready to reuse
 		 */
 		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
-		    stackmap_cb_get_state(scb) == SCB_M_STACK) {
+		    stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 			/* leftover (leftover <= rhead - hwcur) */
 			/*
 			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover,
@@ -392,7 +392,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 */
 		u_int i;
 
-		RD(1, "want more: hwlease %u hwtail %u", rxkring->nkr_hwlease, rxkring->nr_hwtail);
 		for (i = rxkring->nkr_hwlease, n = 0; i != rxkring->nr_hwtail;
 		     i = nm_next(i, lim_rx), n++) {
 			struct netmap_slot *slot = &rxkring->ring->slot[i];
