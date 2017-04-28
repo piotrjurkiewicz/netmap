@@ -2091,9 +2091,13 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		struct netmap_slot tmp;
 		struct stackmap_cb *scb;
 
-		scb = STACKMAP_CB_NMB(NMB(na, slot), NETMAP_BUF_SIZE(na));
-		if (stackmap_cb_get_state(scb) != SCB_M_NOREF && extra->len)
+		scb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
+		if (stackmap_cb_valid(scb) &&
+		    stackmap_cb_get_state(scb) != SCB_M_NOREF && extra->len) {
+			RD(1, "busy scb %p state 0x%x len %u",
+			    scb, stackmap_cb_get_state(scb), extra->len);
 			continue;
+		}
 
 		scbw(scb, NULL, extra);
 		tmp = *extra;

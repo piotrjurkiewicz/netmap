@@ -816,6 +816,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	}
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
 	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
+	/* we may have subsequent frags */
 }
 
 void
@@ -1023,11 +1024,11 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		}
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
-			D("no extra space for nmb %p slot %p scb %p",
+			ND("no extra space for nmb %p slot %p scb %p",
 				nmb, scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		D("enqueued nmb %p to now this slot is at %p scb %p",
+		ND("enqueued nmb %p to now this slot is at %p scb %p",
 			nmb, scb_slot(scb), scb);
 	}
 	/* SCB_M_TXREF or SCB_M_NOREF */

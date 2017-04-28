@@ -301,19 +301,22 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	/* XXX we simply skip processed slots */
 
-	for (k = kring->nr_hwcur; k != rhead; k = nm_next(k, lim_tx)) {
+	ND("begin: rhead %u hwcur %u hwlease %u leftover %u", rhead, kring->nr_hwcur, kring->nkr_hwlease, leftover);
+	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
 		struct netmap_slot *slot = &kring->ring->slot[k];
 		struct stackmap_cb *scb;
 		char *nmb = NMB(na, slot);
 		int error;
 
-		if (unlikely(slot->len == 0))
+		if (unlikely(slot->len == 0)) {
 			continue;
-		/* AT LEAST these are leftover XXX don't go through */
+		}
+#if 0
 		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
 			RD(1, "skipping leftover slot %d", k);
 			continue;
 		}
+#endif /* 0 */
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		__builtin_prefetch(scb);
 		if (unlikely(host)) { // XXX host doesn't batch
@@ -325,8 +328,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
 			/* hold by the stack and sits on this ring */
-			ND(1, "M_QUEUED, extra_enqueue");
 			if (stackmap_extra_enqueue(na, slot)) {
+				ND("enqueue failed, break");
 				break;
 			}
 			continue;
@@ -344,7 +347,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			    ("M_NOREF or STACK not in leftover 0x%x\n",
 			     scb->flags));
 			     */
-			ND("state 0x%x continue", stackmap_cb_get_state(scb));
+			D("state 0x%x continue", stackmap_cb_get_state(scb));
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -352,7 +355,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(na, slot) :
 			     nm_os_stackmap_send(na, slot);
 		if (unlikely(error)) {
-			RD(1, "early break");
+			D("early break");
 			break;
 		}
 	}
@@ -361,6 +364,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		       	rhead - kring->nr_hwcur :
 			rhead + kring->nkr_num_slots - kring->nr_hwcur));
 	}
+
+	kring->nkr_hwlease = k;
 
 	/* Now, we know how many packets go to the receiver
 	 * On TX we can drop packets with handling packets with 
@@ -469,6 +474,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
+		if (sent > 1) {
+			ND("sent %u packets", sent);
+		}
 #endif
 	}
 
@@ -493,7 +501,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 			u_int me = slot - rxkring->ring->slot;
 			rxkring->nkr_hwlease = me;
-			D("enqueue failed: hwtail %u hwlease %u",
+			ND("enqueue failed: hwtail %u hwlease %u",
 					rxkring->nr_hwtail, me);
 			break;
 		}
@@ -504,12 +512,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			if (kring->ring->slot[j].len > 0) // not sent
 				break;
 		}
-		ND(1, "%d leftovers (hwcur %d inuse %d head %d)",
-			ft->npkts, kring->nr_hwcur, j, rhead);
 		k = j;
 	}
 unlock_out:
 	netmap_bdg_runlock(vpna->na_bdg);
+	ND("end: rhead %u hwcur %u hwlease %u leftover %u", rhead, k, kring->nkr_hwlease, ft->npkts);
 	return k;
 }
 
@@ -652,8 +659,9 @@ csum_transmit:
 		 * We don't need scb anymore.
 		 */
 		stackmap_cb_invalidate(scb);
+		slot->len = 0; // XXX
 		MBUF_LINEARIZE(m);
-		D("queued xmit scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
+		ND("queued xmit scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
 			skb_frag_address(&skb_shinfo(m)->frags[0]),
 			ETHTYPE(m->data), TCPFLAG(m->data), TCPSEQ(m->data),
 			TCPEND(m->data), TCPACK(m->data), NMIPHLEN(m->data),
