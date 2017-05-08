@@ -821,7 +821,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
 		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
+	D("scb %p (zerocopy_success %d)", scb, zerocopy_success);
 	/* we may have subsequent frags */
 }
 
@@ -982,7 +982,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	NM_SOCK_T *sk;
 	void *nmb = NMB(na, slot);
 	int err;
-	int pageref = 0; /* XXX Horrible */
+	int pageref = 0;
 
 	ska = stackmap_ska_from_fd(na, slot->fd);
 	if (unlikely(!ska)) {
@@ -1018,13 +1018,11 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
 		/*
-		 * XXX We have the case that the reference to the page
-		 * has just been dropped (e.g., skb was linearized in
-		 * skb_checksum_help() in __dev_queue_xmit()).
-		 * Unfortunately the only way to detect this case is
-		 * comparison to the original reference count.
+		 * XXX The stack might have just dropped the page
+		 * reference (e.g., linearized in skb_checksum_help()
+		 * of __dev_queue_xmit().
 		 */
-		if (pageref == page_ref_count(page)) {
+		if (unlikely(pageref == page_ref_count(page))) {
 			D("just dropped frag ref");
 			stackmap_cb_invalidate(scb);
 			return 0;
@@ -1038,7 +1036,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		D("enqueued nmb %p to now this slot is at %p scb %p",
 			nmb, scb_slot(scb), scb);
 	}
-	/* SCB_M_TXREF or SCB_M_NOREF */
+	/* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;
 }
 
