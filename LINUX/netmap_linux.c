@@ -801,7 +801,12 @@ u_int nm_os_hw_headroom(struct ifnet *ifp)
 	return LL_RESERVED_SPACE(ifp) - ifp->hard_header_len;
 }
 
-/* Releases stack's reference to data */ 
+/* Releases stack's reference to data
+ * We have no way to see subsequent fragments, but such fragments 
+ * are always sent after queueing. Thus, if this destructor is called
+ * for such segments, it's wrong.
+ */
+ 
 void
 nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	bool zerocopy_success)
@@ -813,7 +818,8 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	if (!zerocopy_success) {
 		//panic("x");
 		D("!zerocopy_success (scb %p)", scb);
-	}
+	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
+		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
 	ND("cleared scb %p (zerocopy_success %d)", scb, zerocopy_success);
 	/* we may have subsequent frags */
@@ -932,6 +938,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
+	PRINT_MBUF(m);
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
@@ -1024,11 +1031,11 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		}
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
-			ND("no extra space for nmb %p slot %p scb %p",
+			D("no extra space for nmb %p slot %p scb %p",
 				nmb, scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		ND("enqueued nmb %p to now this slot is at %p scb %p",
+		D("enqueued nmb %p to now this slot is at %p scb %p",
 			nmb, scb_slot(scb), scb);
 	}
 	/* SCB_M_TXREF or SCB_M_NOREF */

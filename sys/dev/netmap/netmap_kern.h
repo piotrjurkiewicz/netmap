@@ -2070,9 +2070,21 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 		(NMTCPHDR(p)->doff >> 4) * 4 : 0)
 #define TCPFLAG(p)	(NMTCPHDR(p) ? NMTCPHDR(p)->flags : 0)
 #define TCPSEQ(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->seq) : 0)
-#define TCPEND(p)	(NMTCPHDR(p) ? (ntohl(NMTCPHDR(p)->seq) + \
+#define TCPEND(p)	(NMTCPHDR(p) ? (TCPSEQ(p) + \
 		(NMIPLEN(p) - NMIPHLEN(p) - NMTCPHLEN(p))) : 0)
 #define TCPACK(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->ack_seq) : 0)
+#define PRINT_MBUF(m) do {\
+	D("m %p sk %p head %p data %p hlen %u end %u f %p flen %u (0x%04x) %s hroom %u ofld %d tcpflag 0x%02x tcpseq %u-%u tcpack %u", m, m->sk, m->head, m->data, skb_headlen(m), skb_end_offset(m),\
+		skb_is_nonlinear(m) ?\
+			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
+		skb_is_nonlinear(m) ?\
+			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
+		ETHTYPE(m->data),\
+		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),\
+		nm_os_mbuf_has_offld(m), TCPFLAG(m->data), TCPSEQ(m->data),\
+		TCPEND(m->data), TCPACK(m->data));\
+} while (0)
+
 //struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
 int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
 int nm_os_stackmap_send(struct netmap_adapter *, struct netmap_slot *);
@@ -2094,7 +2106,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		scb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
 		if (stackmap_cb_valid(scb) &&
 		    stackmap_cb_get_state(scb) != SCB_M_NOREF && extra->len) {
-			RD(1, "busy scb %p state 0x%x len %u",
+			ND(1, "busy scb %p state 0x%x len %u",
 			    scb, stackmap_cb_get_state(scb), extra->len);
 			continue;
 		}

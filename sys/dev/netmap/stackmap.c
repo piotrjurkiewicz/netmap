@@ -475,7 +475,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		ft->nfds -= n;
 		ft->npkts -= sent;
 		if (sent > 1) {
-			ND("sent %u packets", sent);
+			D("sent %u packets", sent);
 		}
 #endif
 	}
@@ -584,18 +584,6 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 }
 
 
-#define PRINT_MBUF(m) do {\
-	D("m %p sk %p head %p len %u end %u f %p len %u (0x%04x) %s headroom %u ofld %d tcpflag 0x%02x tcpseq %u tcpack %u", m, m->sk, m->head, skb_headlen(m), skb_end_offset(m),\
-		skb_is_nonlinear(m) ?\
-			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
-		skb_is_nonlinear(m) ?\
-			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
-		ETHTYPE(m->data),\
-		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),\
-		nm_os_mbuf_has_offld(m), TCPFLAG(m->data), TCPSEQ(m->data),\
-		TCPACK(m->data));\
-} while (0)
-
 /* XXX We need a better way to distinguish m originated from stack */
 int
 stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
@@ -608,7 +596,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 	/* this field has survived cloning */
 
 	//if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
-	//	PRINT_MBUF(m);
+	PRINT_MBUF(m);
 
 	if (!MBUF_NONLINEAR(m)) {
 csum_transmit:
@@ -661,13 +649,15 @@ csum_transmit:
 		stackmap_cb_invalidate(scb);
 		slot->len = 0; // XXX
 		MBUF_LINEARIZE(m);
-		ND("queued xmit scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
+		D("queued xmit scb %p", scb);
+		ND("queued scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
 			skb_frag_address(&skb_shinfo(m)->frags[0]),
 			ETHTYPE(m->data), TCPFLAG(m->data), TCPSEQ(m->data),
 			TCPEND(m->data), TCPACK(m->data), NMIPHLEN(m->data),
 			NMTCPHLEN(m->data));
 		goto csum_transmit;
 	}
+	D("direct scb %p", scb);
 
 	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 
