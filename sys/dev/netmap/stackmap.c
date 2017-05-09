@@ -60,10 +60,13 @@
 #ifdef WITH_STACK
 #define NM_STACKMAP_PULL 1
 static int stackmap_mode = NM_STACKMAP_PULL;//NM_STACKMAP_PULL
+
 //static int stackmap_mode = 0;
+int stackmap_verbose = 0;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_mode, CTLFLAG_RW, &stackmap_mode, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_verbose, CTLFLAG_RW, &stackmap_verbose, 0 , "");
 SYSEND;
 
 #define NM_RANGE(v, s, n, k)	\
@@ -347,7 +350,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			    ("M_NOREF or STACK not in leftover 0x%x\n",
 			     scb->flags));
 			     */
-			D("state 0x%x continue", stackmap_cb_get_state(scb));
+			STMD(STMD_TX, 0,
+			    "state 0x%x continue", stackmap_cb_get_state(scb));
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -355,7 +359,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(na, slot) :
 			     nm_os_stackmap_send(na, slot);
 		if (unlikely(error)) {
-			D("early break");
+			STMD(STMD_TX, 0, "early break");
 			break;
 		}
 	}
@@ -475,7 +479,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		ft->nfds -= n;
 		ft->npkts -= sent;
 		if (sent > 1) {
-			D("sent %u packets", sent);
+			STMD(STMD_TX, 0, "sent %u packets", sent);
 		}
 #endif
 	}
@@ -501,8 +505,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 			u_int me = slot - rxkring->ring->slot;
 			rxkring->nkr_hwlease = me;
-			ND("enqueue failed: hwtail %u hwlease %u",
-					rxkring->nr_hwtail, me);
 			break;
 		}
 	}
@@ -516,7 +518,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	}
 unlock_out:
 	netmap_bdg_runlock(vpna->na_bdg);
-	ND("end: rhead %u hwcur %u hwlease %u leftover %u", rhead, k, kring->nkr_hwlease, ft->npkts);
 	return k;
 }
 
@@ -595,8 +596,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 
 	/* this field has survived cloning */
 
-	//if (!skb_is_nonlinear(m) || (skb_is_nonlinear(m) && !stackmap_cb_valid((STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na))))))
-	PRINT_MBUF(m);
+	STMDMBUF(STMD_TX|STMD_MBUF, 0, m);
 
 	if (!MBUF_NONLINEAR(m)) {
 csum_transmit:
@@ -632,8 +632,7 @@ csum_transmit:
 	/* Possibly from sendpage() context */
 	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
 	if (unlikely(!stackmap_cb_valid(scb))) {
-		D("m %p len %d scb %p is nonlinear but not from our sendpage() (need ofld %d) maybe rexmit",
-				m, m->len, scb, nm_os_mbuf_has_offld(m));
+		STMD(STMD_TX, 0, "nonlinear nonsendpage scb %p", scb);
 		skb_linearize(m);
 		goto csum_transmit;
 	}
@@ -649,27 +648,20 @@ csum_transmit:
 		stackmap_cb_invalidate(scb);
 		slot->len = 0; // XXX
 		MBUF_LINEARIZE(m);
-		D("queued xmit scb %p", scb);
-		ND("queued scb %p m %p data %p len %u f %p eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", scb, m, m->data, m->len,
-			skb_frag_address(&skb_shinfo(m)->frags[0]),
-			ETHTYPE(m->data), TCPFLAG(m->data), TCPSEQ(m->data),
-			TCPEND(m->data), TCPACK(m->data), NMIPHLEN(m->data),
-			NMTCPHLEN(m->data));
+		STMD(STMD_TX | STMD_Q, 0, "queued xmit scb %p", scb);
 		goto csum_transmit;
 	}
-	D("direct scb %p", scb);
+	STMD(STMD_TX, 0, "direct scb %p", scb);
 
 	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
 
 	/* bring protocol headers in */
 	mismatch = (int)slot->offset - MBUF_HEADLEN(m);
-	ND("bring headers to %p: slot->off %u MHEADLEN(m) %u mismatch %d",
-		NMB(na, slot), slot->offset, MBUF_HEADLEN(m), mismatch);
 	if (!mismatch) {
 		/* Length is already validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
-		RD(1, "mismatch %d, copy entire data", mismatch);
+		STMD(STMD_TX, 1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}
 
@@ -688,8 +680,6 @@ csum_transmit:
 		check = &tcph->check;
 		*check = 0;
 		len = slot->len - na->virt_hdr_len - skb_transport_offset(m);
-		ND("nmb %p iphoff %u tcphoff %u tlen %d", NMB(na, slot),
-			skb_network_offset(m), skb_transport_offset(m), len);
 		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 

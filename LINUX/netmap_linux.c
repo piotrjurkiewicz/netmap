@@ -821,7 +821,9 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
 		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	D("scb %p (zerocopy_success %d)", scb, zerocopy_success);
+	STMD(STMD_MBUF, 0,
+		"scb %p (zerocopy_success %d)", scb, zerocopy_success);
+
 	/* we may have subsequent frags */
 }
 
@@ -938,7 +940,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
-	PRINT_MBUF(m);
+	STMDMBUF(STMD_RX|STMD_MBUF, 0, m);
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
@@ -960,14 +962,20 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
-			D("no extra space for nmb %p slot %p scb %p",
-					NMB(scb_kring(scb)->na, scb_slot(scb)),
-					scb_slot(scb), scb);
-			return -EBUSY;
-		}
-		D("enqueued nmb %p to now this slot is at %p scb %p",
+			/*
+			STMD(STMD_RX|STMD_Q, 0,
+				"no extra space for nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
+				*/
+			return -EBUSY;
+		}
+		/*
+		STMD(STMD_RX|STMD_Q, 0,
+			"enqueued nmb %p to now this slot is at %p scb %p",
+				NMB(scb_kring(scb)->na, scb_slot(scb)),
+				scb_slot(scb), scb);
+				*/
 	} /* otherwise it has been consumed or sk_data_ready()-ed */
 	return 0;
 }
@@ -998,9 +1006,6 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	len = slot->len - na->virt_hdr_len - slot->offset;
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	ND("slot %d sk %p fd %d nmb %p scb %p (flag 0x%08x) pageoff %u len %d csumcaps %lx",
-		(int)(slot - scb_kring(scb)->ring->slot), sk, ska->fd,
-		nmb, scb, scb->flags, poff, len, sk_check_csum_caps(sk));
 
 	/* let the stack to manage the buffer */
 	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
@@ -1011,7 +1016,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		 * destructor. So we clear NS_BUSY here. Duplicate clear
 		 * isn't a problem.
 		 */
-		D("error %d in sendpage() slot %ld",
+		STMD(STMD_TX, 0, "error %d in sendpage() slot %ld",
 				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
 	}
@@ -1023,18 +1028,14 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		 * of __dev_queue_xmit().
 		 */
 		if (unlikely(pageref == page_ref_count(page))) {
-			D("just dropped frag ref");
+			STMD(STMD_TX, 0, "just dropped frag ref");
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
-			D("no extra space for nmb %p slot %p scb %p",
-				nmb, scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		D("enqueued nmb %p to now this slot is at %p scb %p",
-			nmb, scb_slot(scb), scb);
 	}
 	/* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;

@@ -2061,6 +2061,7 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
+extern int stackmap_verbose;
 #define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
 #define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
 #define NMIPLEN(p)	(ntohs(NMIPHDR(p)->tot_len))
@@ -2073,17 +2074,47 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #define TCPEND(p)	(NMTCPHDR(p) ? (TCPSEQ(p) + \
 		(NMIPLEN(p) - NMIPHLEN(p) - NMTCPHLEN(p))) : 0)
 #define TCPACK(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->ack_seq) : 0)
-#define PRINT_MBUF(m) do {\
-	D("m %p sk %p head %p data %p hlen %u end %u f %p flen %u (0x%04x) %s hroom %u ofld %d tcpflag 0x%02x tcpseq %u-%u tcpack %u", m, m->sk, m->head, m->data, skb_headlen(m), skb_end_offset(m),\
-		skb_is_nonlinear(m) ?\
-			skb_frag_address(&skb_shinfo(m)->frags[0]): NULL,\
-		skb_is_nonlinear(m) ?\
-			skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
-		ETHTYPE(m->data),\
-		skb_is_nonlinear(m)?"sendpage":"no-sendpage", skb_headroom(m),\
-		nm_os_mbuf_has_offld(m), TCPFLAG(m->data), TCPSEQ(m->data),\
-		TCPEND(m->data), TCPACK(m->data));\
-} while (0)
+#define PRINT_MBUF(m, lps) \
+	do {\
+		char tmp[256]; \
+		snprintf(tmp, sizeof(tmp),\
+			"m %p sk %p head %p data %p hlen %u end %u f %p flen %u (0x%04x) %s hroom %u ofld %d tcpflag 0x%02x tcpseq %u-%u tcpack %u",\
+			m, m->sk, m->head, m->data, skb_headlen(m),\
+			skb_end_offset(m),\
+			skb_is_nonlinear(m) ?\
+			skb_frag_address(&skb_shinfo(m)->frags[0]) : NULL,\
+			skb_is_nonlinear(m) ?\
+				skb_frag_size(&skb_shinfo(m)->frags[0]) : 0,\
+			ETHTYPE(m->data),\
+			skb_is_nonlinear(m) ? "sendpage":"no-sendpage",\
+			skb_headroom(m), nm_os_mbuf_has_offld(m),\
+			TCPFLAG(m->data), TCPSEQ(m->data),\
+			TCPEND(m->data), TCPACK(m->data));\
+		if (lps)\
+			RD(lps, "%s", tmp); \
+		else\
+			D("%s", tmp); \
+	} while (0)
+#define STMD_TX	0x01
+#define STMD_RX	0x02
+#define STMD_Q	0x04
+#define STMD_MBUF	0x08
+#define STMD_CTL	0x20
+#define STMD_ALLPKT	(STMD_TX | STMD_RX | STMD_Q | STMD_DTOR)
+#define STMD(level, lps, format, ...) \
+	do {\
+		if ((stackmap_verbose & (level)) == (level)) { \
+			if (lps) \
+				RD(lps, format, ##__VA_ARGS__); \
+			else \
+			       	D(format, ##__VA_ARGS__); \
+		} \
+	} while (0)
+#define STMDMBUF(level, lps, m)	\
+	do {\
+		if ((stackmap_verbose & (level)) == (level)) \
+			PRINT_MBUF(m, lps);\
+	} while (0)
 
 //struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
 int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
@@ -2097,21 +2128,21 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
 	struct netmap_slot *slots = sna->extra_slots;
 	int i, n = sna->extra_num;
+	struct stackmap_cb *scb = STACKMAP_CB_NMB(NMB(na, slot),
+			NETMAP_BUF_SIZE(na));
 
 	for (i = 0; i < n; i++) {
 		struct netmap_slot *extra = &slots[i];
 		struct netmap_slot tmp;
-		struct stackmap_cb *scb;
+		struct stackmap_cb *xcb;
 
-		scb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
-		if (stackmap_cb_valid(scb) &&
-		    stackmap_cb_get_state(scb) != SCB_M_NOREF && extra->len) {
-			ND(1, "busy scb %p state 0x%x len %u",
-			    scb, stackmap_cb_get_state(scb), extra->len);
+		xcb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
+		if (stackmap_cb_valid(xcb) &&
+		    stackmap_cb_get_state(xcb) != SCB_M_NOREF && extra->len) {
 			continue;
 		}
 
-		scbw(scb, NULL, extra);
+		scbw(xcb, NULL, extra);
 		tmp = *extra;
 		*extra = *slot;
 		/* no need for NS_BUF_CHANGED on extra slot */
@@ -2124,8 +2155,11 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		slot->flags |= NS_BUF_CHANGED;
 		slot->len = slot->offset = slot->next = 0;
 		slot->fd = 0;
+		STMD(STMD_Q, 0, "enqueued nmb %p scb %p to slot %p",
+			NMB(na, slot), xcb, scb_slot(xcb));
 		return 0;
 	}
+	STMD(STMD_Q, 0, "no extra for nmb %p scb %p", NMB(na, slot), scb);
 	return EBUSY;
 }
 
