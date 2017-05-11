@@ -327,6 +327,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scbw(scb, kring, slot);
 			stackmap_cb_set_state(scb, SCB_M_NOREF);
 			stackmap_add_fdtable(scb, kring);
+			STMDPKT(STMD_HOST, 0, nmb + na->virt_hdr_len);
 			continue;
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
@@ -359,7 +360,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(na, slot) :
 			     nm_os_stackmap_send(na, slot);
 		if (unlikely(error)) {
-			STMD(STMD_TX, 0, "early break");
+			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
 			break;
 		}
 	}
@@ -479,7 +480,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		ft->nfds -= n;
 		ft->npkts -= sent;
 		if (sent > 1) {
-			STMD(STMD_TX, 0, "sent %u packets", sent);
+			STMD(STMD_Q, 0, "sent %u packets", sent);
 		}
 #endif
 	}
@@ -596,7 +597,7 @@ stackmap_ndo_start_xmit(struct mbuf *m, struct ifnet *ifp)
 
 	/* this field has survived cloning */
 
-	STMDMBUF(STMD_TX|STMD_MBUF, 0, m);
+	STMDPKT(STMD_TX, 0, m->data);
 
 	if (!MBUF_NONLINEAR(m)) {
 csum_transmit:
@@ -648,7 +649,7 @@ csum_transmit:
 		stackmap_cb_invalidate(scb);
 		slot->len = 0; // XXX
 		MBUF_LINEARIZE(m);
-		STMD(STMD_TX | STMD_Q, 0, "queued xmit scb %p", scb);
+		STMD(STMD_Q, 0, "queued xmit scb %p", scb);
 		goto csum_transmit;
 	}
 	STMD(STMD_TX, 0, "direct scb %p", scb);
@@ -778,6 +779,8 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 		 * We must set buffer offset before finalizing at nm_bdg_ctl()
 		 * callback. As we see, we adopt the value for the first NIC */
 		slave->virt_hdr_len = hwna->virt_hdr_len = na->virt_hdr_len;
+		if (hwna->na_flags & NAF_HOST_RINGS)
+			bna->host.up.virt_hdr_len = slave->virt_hdr_len;
 		error = slave->nm_bdg_ctl(slave, &nmr, 1);
 		if (error) {
 			netmap_adapter_put(slave);
@@ -1007,7 +1010,6 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 #else
 		na->virt_hdr_len = sizeof(struct stackmap_cb);
 #endif /* STACKMAP_CB_TAIL */
-		D("virt_hdr_len %d", na->virt_hdr_len);
 #ifdef NETMAP_MEM_MAPPING
 		//netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 #endif /* NETMAP_MEM_MAPPING */

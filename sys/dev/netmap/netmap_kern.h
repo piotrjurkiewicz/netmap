@@ -2074,6 +2074,18 @@ extern int stackmap_verbose;
 #define TCPEND(p)	(NMTCPHDR(p) ? (TCPSEQ(p) + \
 		(NMIPLEN(p) - NMIPHLEN(p) - NMTCPHLEN(p))) : 0)
 #define TCPACK(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->ack_seq) : 0)
+#define STMDPKT(level, lps, p) \
+	do {\
+		if ((stackmap_verbose & (level)) != (level)) \
+			break;\
+		if (lps)\
+		  RD(lps, "%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
+		    ETHTYPE(p), TCPFLAG(p), TCPSEQ(p), TCPEND(p), TCPACK(p));\
+		else \
+		  D("%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
+		    ETHTYPE(p), TCPFLAG(p), TCPSEQ(p), TCPEND(p), TCPACK(p));\
+	} while (0)
+
 #define PRINT_MBUF(m, lps) \
 	do {\
 		char tmp[256]; \
@@ -2095,12 +2107,12 @@ extern int stackmap_verbose;
 		else\
 			D("%s", tmp); \
 	} while (0)
-#define STMD_TX	0x01
-#define STMD_RX	0x02
-#define STMD_Q	0x04
-#define STMD_MBUF	0x08
+#define STMD_TX		0x01
+#define STMD_RX		0x02
+#define STMD_HOST	0x04
+#define STMD_Q	0x08
+#define STMD_MBUF	0x10
 #define STMD_CTL	0x20
-#define STMD_ALLPKT	(STMD_TX | STMD_RX | STMD_Q | STMD_DTOR)
 #define STMD(level, lps, format, ...) \
 	do {\
 		if ((stackmap_verbose & (level)) == (level)) { \
@@ -2156,7 +2168,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		slot->len = slot->offset = slot->next = 0;
 		slot->fd = 0;
 		STMD(STMD_Q, 0, "enqueued nmb %p scb %p to slot %p",
-			NMB(na, slot), xcb, scb_slot(xcb));
+			NMB(na, extra), scb, scb_slot(scb));
 		return 0;
 	}
 	STMD(STMD_Q, 0, "no extra for nmb %p scb %p", NMB(na, slot), scb);

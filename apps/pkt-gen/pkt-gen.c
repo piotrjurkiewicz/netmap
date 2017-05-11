@@ -1766,16 +1766,16 @@ sender_body(void *data)
 	for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
 		txring = NETMAP_TXRING(nifp, i);
 		while (!targ->cancel && nm_tx_pending(txring)) {
-			RD(5, "pending tx tail %d head %d on ring %d",
+			RD(1, "pending tx tail %d head %d on ring %d",
 				txring->tail, txring->head, i);
 			/* stack port might need to process incoming packets 
 			 * like ARP and ACK
 			 */
 			if (pfd[0].events & POLLIN)
-				poll(&pfd[0], 1, 1000);
+				poll(&pfd[0], 1, 0);
 			else
 				ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
-			usleep(1); /* wait 1 tick */
+			//usleep(1); /* wait 1 tick */
 		}
 	}
     } /* end DEV_NETMAP */

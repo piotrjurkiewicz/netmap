@@ -821,9 +821,8 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
 		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	STMD(STMD_MBUF, 0,
+	STMD(STMD_Q, 0,
 		"scb %p (zerocopy_success %d)", scb, zerocopy_success);
-
 	/* we may have subsequent frags */
 }
 
@@ -938,18 +937,15 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	if (!m)
 		return 0; // drop and skip
 
+	STMD(STMD_RX, 0, "receiving");
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
-	STMDMBUF(STMD_RX|STMD_MBUF, 0, m);
+	STMDPKT(STMD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
 
-	ND("m %p len %u eth 0x%04x tcpflag 0x%02x seq %u-%u ack %u iphlen %u tcphlen %u", m,
-			skb_headlen(m), ETHTYPE(m->data-14),
-			TCPFLAG(m->data-14), TCPSEQ(m->data-14),
-			TCPEND(m->data-14), TCPACK(m->data-14), NMIPHLEN(m->data-14), NMTCPHLEN(m->data-14));
 	/* pass the packet to the stack */
 	netif_receive_skb(m);
 
@@ -963,7 +959,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
 			/*
-			STMD(STMD_RX|STMD_Q, 0,
+			STMD(STMD_Q, 0,
 				"no extra space for nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
@@ -971,7 +967,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 			return -EBUSY;
 		}
 		/*
-		STMD(STMD_RX|STMD_Q, 0,
+		STMD(STMD_Q, 0,
 			"enqueued nmb %p to now this slot is at %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
@@ -1036,6 +1032,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		if (stackmap_extra_enqueue(na, slot)) {
 			return -EBUSY;
 		}
+		return -EBUSY; // suppress following packets
 	}
 	/* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;
