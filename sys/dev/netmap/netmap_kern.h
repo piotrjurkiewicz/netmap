@@ -2167,11 +2167,22 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 		slot->flags |= NS_BUF_CHANGED;
 		slot->len = slot->offset = slot->next = 0;
 		slot->fd = 0;
-		STMD(STMD_Q, 0, "enqueued nmb %p scb %p to slot %p",
-			NMB(na, extra), scb, scb_slot(scb));
+		//STMD(STMD_Q, 0, "enqueued nmb %p scb %p slot %lu to slot %p",
+		//	NMB(na, extra), scb, slot - scb_kring(scb)->ring->slot, scb_slot(scb));
 		return 0;
 	}
-	STMD(STMD_Q, 0, "no extra for nmb %p scb %p slot %lu", NMB(na, slot), scb, slot - scb_kring(scb)->ring->slot);
+	//STMD(STMD_Q, 0, "no extra for nmb %p scb %p slot %lu", NMB(na, slot), scb, slot - scb_kring(scb)->ring->slot);
+	/*
+	if ((stackmap_verbose & STMD_Q) == STMD_Q) {
+		for (i = 0; i < n; i++) {
+			struct netmap_slot *extra = &slots[i];
+			struct stackmap_cb *xcb;
+			xcb = STACKMAP_CB_NMB(NMB(na, extra),
+					NETMAP_BUF_SIZE(na));
+			D("extra %d state %d", i, stackmap_cb_get_state(xcb));
+		}
+	}
+	*/
 	return EBUSY;
 }
 

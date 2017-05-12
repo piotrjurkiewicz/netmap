@@ -528,10 +528,10 @@ void netmap_bns_unregister(void);
 #define STACKMAP_CB(_m) ((struct stackmap_cb *)(_m)->head)
 #define STACKMAP_CB_NMB(_buf, _bufsiz) ((struct stackmap_cb *)(_buf))
 #endif /* STACKMAP_CB_TAIL */
-#define STACKMAP_CB_FRAG(_m, _bufsiz) \
+#define STACKMAP_CB_FRAG(_m, _i, _bufsiz) \
 	STACKMAP_CB_NMB(page_address(\
-		skb_frag_page(&skb_shinfo((_m))->frags[0])) + \
-		_bufsiz * (skb_shinfo((_m))->frags[0].page_offset / _bufsiz),\
+		skb_frag_page(&skb_shinfo((_m))->frags[_i])) + \
+		_bufsiz * (skb_shinfo((_m))->frags[_i].page_offset / _bufsiz),\
 		_bufsiz)
 
 struct nm_ubuf_info {

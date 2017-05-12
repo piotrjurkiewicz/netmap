@@ -817,7 +817,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	scb = container_of(u, struct stackmap_cb, ui);
 	if (!zerocopy_success) {
 		//panic("x");
-		D("!zerocopy_success (scb %p)", scb);
+		STMD(STMD_TX, 0, "!zerocopy_success (scb %p)", scb);
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
 		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
@@ -948,8 +948,10 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	/* pass the packet to the stack */
 	netif_receive_skb(m);
 
-	/* setting data destructor is only safe after skb_orphan_frag()
-	 * in __netif_receive_skb_core().  */
+	/*
+	 * setting data destructor is only safe after skb_orphan_frag()
+	 * in __netif_receive_skb_core().
+	 */
 	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
 		/* mbuf alive (our destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
@@ -957,20 +959,16 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
-			/*
 			STMD(STMD_Q, 0,
 				"no extra space for nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
-				*/
 			return -EBUSY;
 		}
-		/*
 		STMD(STMD_Q, 0,
 			"enqueued nmb %p to now this slot is at %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
-				*/
 	} /* otherwise it has been consumed or sk_data_ready()-ed */
 	return 0;
 }
@@ -1023,10 +1021,11 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		 * of __dev_queue_xmit().
 		 */
 		if (unlikely(pageref == page_ref_count(page))) {
-			STMD(STMD_TX, 0, "just dropped frag ref");
+			STMD(STMD_Q, 0, "just dropped frag ref");
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
+		STMD(STMD_Q, 0, "enqueuing scb %p flags 0x%08x", scb, scb->flags);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(na, slot)) {
 			return -EBUSY;

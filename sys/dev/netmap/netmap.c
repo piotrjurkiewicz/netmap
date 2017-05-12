@@ -2778,7 +2778,8 @@ do_retry_rx:
 			else
 				goto do_retry_rx;
 		}
-	}
+	} else
+		RD(1, "no want_rx");
 
 	/*
 	 * Transparent mode: released bufs (i.e. between kring->nr_hwcur and

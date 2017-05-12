@@ -112,7 +112,6 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 
 	/* just wakeup the client on the master */
 	mna = stackmap_master(vpna);
-	ND("%s interrupt (kring %p)", t == NR_TX ? "tx" : "rx", kring);
 	if (mna) {
 		struct netmap_kring *mkring;
 		u_int me = kring - NMR(na, t), mnr;
@@ -121,6 +120,7 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 			return netmap_bwrap_intr_notify(kring, flags);
 		mnr = t == NR_RX ? mna->num_rx_rings : mna->num_tx_rings;
 		mkring = &NMR(mna, t)[mnr > me ? me : 0];
+		//STMD(STMD_RX, 0, "interrupt (kring %p)", kring);
 		mkring->nm_notify(mkring, 0);
 	}
 	return NM_IRQ_COMPLETED;
@@ -300,6 +300,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
+		STMD(STMD_RX, 0, "rx: rhead %u hwcur %u hwlease %u leftover %u", rhead, kring->nr_hwcur, kring->nkr_hwlease, leftover);
 	}
 
 	/* XXX we simply skip processed slots */
@@ -322,6 +323,10 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif /* 0 */
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		__builtin_prefetch(scb);
+		if (rx) {
+			STMDPKT(STMD_RX, 0, nmb+2);
+			STMD(STMD_RX, 0, "state %u", stackmap_cb_get_state(scb));
+		}
 		if (unlikely(host)) { // XXX host doesn't batch
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
@@ -332,8 +337,16 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
 			/* hold by the stack and sits on this ring */
+			//STMD(STMD_Q, 1, "slot %d scb %p still hold by stack", k, scb);
 			if (stackmap_extra_enqueue(na, slot)) {
-				ND("enqueue failed, break");
+				STMD(STMD_Q, 1, "slot %d scb %p enqueue failed (snd_una %u snd_nxt %u)",
+					k, scb,
+					stackmap_ska_from_fd(na, slot->fd) ?
+					tcp_sk(stackmap_ska_from_fd(na, slot->fd)->sk)->snd_una :
+				       	0,
+					stackmap_ska_from_fd(na, slot->fd) ?
+					tcp_sk(stackmap_ska_from_fd(na, slot->fd)->sk)->snd_nxt :
+					0);
 				break;
 			}
 			continue;
@@ -342,15 +355,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		 * The first case must be just skipped and latter case
 		 * is ready to reuse
 		 */
-		if (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
-		    stackmap_cb_get_state(scb) == SCB_M_TXREF) {
+		if (!rx && (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
+		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
 			/* leftover (leftover <= rhead - hwcur) */
-			/*
-			KASSERT(NM_RANGE(k, kring->nr_hwcur, leftover,
-						kring),
-			    ("M_NOREF or STACK not in leftover 0x%x\n",
-			     scb->flags));
-			     */
 			STMD(STMD_TX, 0,
 			    "state 0x%x continue", stackmap_cb_get_state(scb));
 			continue;
@@ -483,7 +490,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		ft->nfds -= n;
 		ft->npkts -= sent;
 		if (sent > 1) {
-			STMD(STMD_Q, 0, "sent %u packets", sent);
+			STMD(STMD_TX, 0, "sent %u packets", sent);
 		}
 #endif
 	}
@@ -539,7 +546,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 	if (err)
 		return err;
 	if (stackmap_mode == NM_STACKMAP_PULL) {
-		ND("kr %p rhead %u hwcur %u tail %u lease %u nslots %u",
+		ND(STMD_RX, 0, "kr %p rhead %u hwcur %u tail %u lease %u nslots %u",
 				kring, kring->rhead, kring->nr_hwcur,
 				kring->nr_hwtail, kring->nkr_hwlease,
 				kring->nkr_num_slots);
@@ -628,13 +635,18 @@ csum_transmit:
 					- skb_transport_header(m), check);
 			m->ip_summed = 0;
 		}
+		STMDPKT(STMD_Q, 0, m->data);
 		netmap_transmit(ifp, m);
 		return 0;
 	}
 
 
 	/* Possibly from sendpage() context */
-	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
+	if (skb_shinfo(m)->nr_frags > 1) {
+		STMD(STMD_Q, 0, "nr_frags %d", skb_shinfo(m)->nr_frags);
+		STMDPKT(STMD_Q, 0, m->data);
+	}
+	scb = STACKMAP_CB_FRAG(m, 0, NETMAP_BUF_SIZE(na));
 	if (unlikely(!stackmap_cb_valid(scb))) {
 		STMD(STMD_TX, 0, "nonlinear nonsendpage scb %p", scb);
 		skb_linearize(m);
@@ -648,13 +660,24 @@ csum_transmit:
 	       	/* originated by netmap but has been queued in either extra
 		 * or txring slot. The backend might drop this packet
 		 * We don't need scb anymore.
+		 * This mbuf might accompany other frags also from us.
+		 * So their scbs need to be invalidated too.
 		 */
-		stackmap_cb_invalidate(scb);
+		struct stackmap_cb *scb2;
+		int i, n = skb_shinfo(m)->nr_frags;
+
+		STMD(STMD_Q, 0, "queued xmit");
+		for (i = 0; i < n; i++) {
+			scb2 = STACKMAP_CB_FRAG(m, i, NETMAP_BUF_SIZE(na));
+			stackmap_cb_invalidate(scb2);
+			STMD(STMD_Q, 0, "frag[%d] scb %p flags 0x%08x", i, scb2, scb2->flags);
+		}
 		slot->len = 0; // XXX
 		MBUF_LINEARIZE(m);
-		STMD(STMD_Q, 0, "queued xmit scb %p", scb);
 		goto csum_transmit;
 	}
+	if (skb_shinfo(m)->nr_frags > 1)
+		STMD(STMD_Q, 0, "direct scb %p but %d frags", scb, skb_shinfo(m)->nr_frags);
 	STMD(STMD_TX, 0, "direct scb %p", scb);
 
 	//KASSERT(stackmap_cb_get_state(scb) == SCB_M_STACK, "invalid state");
