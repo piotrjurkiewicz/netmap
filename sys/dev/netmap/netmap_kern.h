@@ -2171,7 +2171,7 @@ stackmap_extra_enqueue(struct netmap_adapter *na,
 			NMB(na, extra), scb, scb_slot(scb));
 		return 0;
 	}
-	STMD(STMD_Q, 0, "no extra for nmb %p scb %p", NMB(na, slot), scb);
+	STMD(STMD_Q, 0, "no extra for nmb %p scb %p slot %lu", NMB(na, slot), scb, slot - scb_kring(scb)->ring->slot);
 	return EBUSY;
 }
 

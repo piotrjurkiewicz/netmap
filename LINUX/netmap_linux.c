@@ -821,7 +821,7 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
 		panic("data_destructor on M_QUEUED scb");
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	STMD(STMD_Q, 0,
+	STMD(STMD_TX, 0,
 		"scb %p (zerocopy_success %d)", scb, zerocopy_success);
 	/* we may have subsequent frags */
 }
@@ -937,7 +937,6 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	if (!m)
 		return 0; // drop and skip
 
-	STMD(STMD_RX, 0, "receiving");
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
 	STMDPKT(STMD_RX, 0, m->data);

@@ -412,6 +412,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
 				break;
 		}
+		if (!n) {
+			STMD(STMD_Q, 1, "not claimed anything on rxring");
+		}
 		howmany += n;
 		rxkring->nkr_hwlease = i;
 	} else if (ft->npkts < howmany)
