@@ -1775,7 +1775,7 @@ sender_body(void *data)
 				poll(&pfd[0], 1, 0);
 			else
 				ioctl(pfd[0].fd, NIOCTXSYNC, NULL);
-			//usleep(1); /* wait 1 tick */
+			usleep(1); /* wait 1 tick */
 		}
 	}
     } /* end DEV_NETMAP */

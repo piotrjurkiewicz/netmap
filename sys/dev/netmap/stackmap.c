@@ -300,7 +300,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
-		STMD(STMD_RX, 0, "rx: rhead %u hwcur %u hwlease %u leftover %u", rhead, kring->nr_hwcur, kring->nkr_hwlease, leftover);
 	}
 
 	/* XXX we simply skip processed slots */
@@ -315,18 +314,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (unlikely(slot->len == 0)) {
 			continue;
 		}
-#if 0
-		if (NM_RANGE(k, kring->nr_hwcur, leftover, kring)) {
-			RD(1, "skipping leftover slot %d", k);
-			continue;
-		}
-#endif /* 0 */
 		scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 		__builtin_prefetch(scb);
-		if (rx) {
-			STMDPKT(STMD_RX, 0, nmb+2);
-			STMD(STMD_RX, 0, "state %u", stackmap_cb_get_state(scb));
-		}
 		if (unlikely(host)) { // XXX host doesn't batch
 			slot->fd = STACKMAP_FD_HOST;
 			scbw(scb, kring, slot);
@@ -337,18 +326,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
 			/* hold by the stack and sits on this ring */
-			//STMD(STMD_Q, 1, "slot %d scb %p still hold by stack", k, scb);
-			if (stackmap_extra_enqueue(na, slot)) {
-				STMD(STMD_Q, 1, "slot %d scb %p enqueue failed (snd_una %u snd_nxt %u)",
-					k, scb,
-					stackmap_ska_from_fd(na, slot->fd) ?
-					tcp_sk(stackmap_ska_from_fd(na, slot->fd)->sk)->snd_una :
-				       	0,
-					stackmap_ska_from_fd(na, slot->fd) ?
-					tcp_sk(stackmap_ska_from_fd(na, slot->fd)->sk)->snd_nxt :
-					0);
+			if (stackmap_extra_enqueue(na, slot))
 				break;
-			}
 			continue;
 		}
 		/* M_NOREF has two cases: leftover and just consumed.
@@ -358,8 +337,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (!rx && (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
 			/* leftover (leftover <= rhead - hwcur) */
-			STMD(STMD_TX, 0,
-			    "state 0x%x continue", stackmap_cb_get_state(scb));
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -370,11 +347,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
 			break;
 		}
-	}
-	if (rx) {
-		ND("rx %d packets", (rhead - (int)kring->nr_hwcur >= 0 ?
-		       	rhead - kring->nr_hwcur :
-			rhead + kring->nkr_num_slots - kring->nr_hwcur));
 	}
 
 	kring->nkr_hwlease = k;
