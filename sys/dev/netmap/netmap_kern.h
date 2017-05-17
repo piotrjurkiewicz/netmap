@@ -1128,7 +1128,7 @@ stackmap_cb_get_state(struct stackmap_cb *scb)
 }
 
 int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */
-netdev_tx_t stackmap_ndo_start_xmit(struct mbuf *, struct ifnet *);
+netdev_tx_t linux_stackmap_start_xmit(struct mbuf *, struct ifnet *);
 void nm_os_stackmap_data_ready(NM_SOCK_T *);
 u_int nm_os_hw_headroom(struct ifnet *ifp);
 void stackmap_add_fdtable(struct stackmap_cb *, struct netmap_kring *);
@@ -2062,34 +2062,39 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 
 #ifdef WITH_STACK
 extern int stackmap_verbose;
-#define ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
-#define NMIPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
-#define NMIPLEN(p)	(ntohs(NMIPHDR(p)->tot_len))
-#define NMIPHLEN(p)	((NMIPHDR(p)->version_ihl & 0x0F) << 2)
-#define NMTCPHDR(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? (struct nm_tcphdr *)((uint8_t *)NMIPHDR(p) + NMIPHLEN(p)) : NULL)
-#define NMTCPHLEN(p)	(NMIPHDR(p)->protocol == IPPROTO_TCP ? \
-		(NMTCPHDR(p)->doff >> 4) * 4 : 0)
-#define TCPFLAG(p)	(NMTCPHDR(p) ? NMTCPHDR(p)->flags : 0)
-#define TCPSEQ(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->seq) : 0)
-#define TCPEND(p)	(NMTCPHDR(p) ? (TCPSEQ(p) + \
-		(NMIPLEN(p) - NMIPHLEN(p) - NMTCPHLEN(p))) : 0)
-#define TCPACK(p)	(NMTCPHDR(p) ? ntohl(NMTCPHDR(p)->ack_seq) : 0)
+#define NM_ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
+#define NM_IPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
+#define NM_IPLEN(p)	(ntohs(NM_IPHDR(p)->tot_len))
+#define NM_IPHLEN(p)	((NM_IPHDR(p)->version_ihl & 0x0F) << 2)
+#define NM_TCPHDR(p)	(NM_IPHDR(p)->protocol == IPPROTO_TCP ? \
+				(struct nm_tcphdr *)\
+				((uint8_t *)NM_IPHDR(p) + NM_IPHLEN(p)) : NULL)
+#define NM_TCPHLEN(p)	(NM_IPHDR(p)->protocol == IPPROTO_TCP ? \
+				(NM_TCPHDR(p)->doff >> 4) * 4 : 0)
+#define NM_TCPFLAG(p)	(NM_TCPHDR(p) ? NM_TCPHDR(p)->flags : 0)
+#define NM_TCPSEQ(p)	(NM_TCPHDR(p) ? ntohl(NM_TCPHDR(p)->seq) : 0)
+#define NM_TCPEND(p)	(NM_TCPHDR(p) ? (NM_TCPSEQ(p) + \
+			    (NM_IPLEN(p) - NM_IPHLEN(p) - NM_TCPHLEN(p))) : 0)
+#define NM_TCPACK(p)	(NM_TCPHDR(p) ? ntohl(NM_TCPHDR(p)->ack_seq) : 0)
 #define STMDPKT(level, lps, p) \
 	do {\
 		if ((stackmap_verbose & (level)) != (level)) \
 			break;\
 		if (lps)\
 		  RD(lps, "%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
-		    ETHTYPE(p), TCPFLAG(p), TCPSEQ(p), TCPEND(p), TCPACK(p));\
+		    NM_ETHTYPE(p), NM_TCPFLAG(p), NM_TCPSEQ(p), NM_TCPEND(p),\
+		    NM_TCPACK(p));\
 		else \
 		  D("%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
-		    ETHTYPE(p), TCPFLAG(p), TCPSEQ(p), TCPEND(p), TCPACK(p));\
+		    NM_ETHTYPE(p), NM_TCPFLAG(p), NM_TCPSEQ(p), NM_TCPEND(p),\
+		    NM_TCPACK(p));\
 	} while (0)
 
 #define STMD_TX		0x01
 #define STMD_RX		0x02
 #define STMD_HOST	0x04
 #define STMD_Q		0x08
+#define STMD_G		0x10
 #define STMD(level, lps, format, ...) \
 	do {\
 		if ((stackmap_verbose & (level)) == (level)) { \
@@ -2104,44 +2109,7 @@ extern int stackmap_verbose;
 int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
 int nm_os_stackmap_send(struct netmap_adapter *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
-/* TODO: avoid linear search... */
-static inline int
-stackmap_extra_enqueue(struct netmap_adapter *na,
-	struct netmap_slot *slot)
-{
-	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
-	struct netmap_slot *slots = sna->extra_slots;
-	int i, n = sna->extra_num;
-
-	for (i = 0; i < n; i++) {
-		struct netmap_slot *extra = &slots[i];
-		struct netmap_slot tmp;
-		struct stackmap_cb *xcb;
-
-		xcb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
-		if (stackmap_cb_valid(xcb) &&
-		    stackmap_cb_get_state(xcb) != SCB_M_NOREF && extra->len) {
-			continue;
-		}
-
-		scbw(xcb, NULL, extra);
-		tmp = *extra;
-		*extra = *slot;
-		/* no need for NS_BUF_CHANGED on extra slot */
-		if (!slot->buf_idx && !tmp.buf_idx) {
-			D("slot->buf_idx %d tmp.buf_idx %d",
-				slot->buf_idx, tmp.buf_idx);
-			panic("xxx");
-		}
-		slot->buf_idx = tmp.buf_idx;
-		slot->flags |= NS_BUF_CHANGED;
-		slot->len = slot->offset = slot->next = 0;
-		slot->fd = 0;
-		return 0;
-	}
-	return EBUSY;
-}
-
+int stackmap_extra_enqueue(struct netmap_adapter *, struct netmap_slot *);
 #endif /* WITH_STACK */
 
 /* Shared declarations for the VALE switch. */

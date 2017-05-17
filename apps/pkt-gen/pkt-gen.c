@@ -1515,7 +1515,7 @@ sender_body(void *data)
 	}
 	if (targ->g->dev_type == DEV_NETMAP &&
 	    !strncmp(targ->g->ifname, "stack", 5)) {
-		pfd[0].events |= POLLIN; /* for ARP exchange on PULL mode */
+		pfd[0].events |= POLLIN; /* ARP/Ack processing */
 		if (targ->g->transport == IPPROTO_TCP)
 			targ->g->soff = 14+20+20+12; // tsopt
 		else /* UDP */
@@ -1766,7 +1766,7 @@ sender_body(void *data)
 	for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
 		txring = NETMAP_TXRING(nifp, i);
 		while (!targ->cancel && nm_tx_pending(txring)) {
-			RD(1, "pending tx tail %d head %d on ring %d",
+			D("pending tx tail %d head %d on ring %d",
 				txring->tail, txring->head, i);
 			/* stack port might need to process incoming packets 
 			 * like ARP and ACK

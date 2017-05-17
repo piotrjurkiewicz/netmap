@@ -796,6 +796,13 @@ nm_os_generic_set_features(struct netmap_generic_adapter *gna)
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
+netdev_tx_t
+linux_stackmap_start_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+	stackmap_transmit(dev, skb);
+	return (NETDEV_TX_OK);
+}
+
 u_int nm_os_hw_headroom(struct ifnet *ifp)
 {
 	return LL_RESERVED_SPACE(ifp) - ifp->hard_header_len;
@@ -940,6 +947,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
 	STMDPKT(STMD_RX, 0, m->data);
+	RD(1, "");
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
@@ -1001,14 +1009,16 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 
 	/* let the stack to manage the buffer */
-	err = sk->sk_prot->sendpage(sk, page, poff, len, 0);
+	err = kernel_sendpage(sk->sk_socket, page, poff, len, 0);
 	if (unlikely(err < 0)) {
-		/* Treat as if this buffer is consumed and hope mbuf
-		 * has been freed.
-		 * mbuf hasn't reached ndo_start_xmit() that sets ubuf 
-		 * destructor. So we clear NS_BUSY here. Duplicate clear
-		 * isn't a problem.
+		/* Treat as if this buffer is consumed, hoping mbuf to
+		 * be freed.
 		 */
+		if (stackmap_cb_get_state(scb) != SCB_M_STACK) {
+			D("sendpage() error with unexpected state %d, panic",
+			 stackmap_cb_get_state(scb));
+			panic("x");
+		}
 		STMD(STMD_TX, 0, "error %d in sendpage() slot %ld",
 				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
@@ -1031,8 +1041,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 			return -EBUSY;
 		}
 		return -EBUSY; // suppress following packets
-	}
-	/* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
+	} /* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;
 }
 

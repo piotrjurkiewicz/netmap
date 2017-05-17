@@ -99,34 +99,6 @@ nm_bridge_rthash(const uint8_t *addr)
 #define for_bdg_ports(i, b) \
 	for ((i) = 0; (i) < netmap_bdg_active_ports((b)); (i)++)
 
-/*
- * this is a slightly optimized copy routine which rounds
- * to multiple of 64 bytes and is often faster than dealing
- * with other odd sizes. We assume there is enough room
- * in the source and destination buffers.
- *
- * XXX only for multiples of 64 bytes, non overlapped.
- */
-static inline void
-pkt_copy(void *_src, void *_dst, int l)
-{
-        uint64_t *src = _src;
-        uint64_t *dst = _dst;
-        if (unlikely(l >= 1024)) {
-                memcpy(dst, src, l);
-                return;
-        }
-        for (; likely(l > 0); l-=64) {
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-                *dst++ = *src++;
-        }
-}
 
 /*
  * For each output interface, nm_bdg_q is used to construct a list.
@@ -138,77 +110,6 @@ struct nm_bdg_q {
 	uint16_t bq_tail;
 	uint32_t bq_len;	/* number of buffers */
 };
-
-/*
- * Available space in the ring. Only used in VALE code
- * and only with is_rx = 1
- */
-static inline uint32_t
-nm_kr_space(struct netmap_kring *k, int is_rx)
-{
-	int space;
-
-	if (is_rx) {
-		int busy = k->nkr_hwlease - k->nr_hwcur;
-		if (busy < 0)
-			busy += k->nkr_num_slots;
-		space = k->nkr_num_slots - 1 - busy;
-	} else {
-		/* XXX never used in this branch */
-		space = k->nr_hwtail - k->nkr_hwlease;
-		if (space < 0)
-			space += k->nkr_num_slots;
-	}
-#if 0
-	// sanity check
-	if (k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_tail >= k->nkr_num_slots ||
-		busy < 0 ||
-		busy >= k->nkr_num_slots) {
-		D("invalid kring, cur %d tail %d lease %d lease_idx %d lim %d",			k->nr_hwcur, k->nr_hwtail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-#endif
-	return space;
-}
-
-
-
-
-/* make a lease on the kring for N positions. return the
- * lease index
- * XXX only used in VALE code and with is_rx = 1
- */
-static inline uint32_t
-nm_kr_lease(struct netmap_kring *k, u_int n, int is_rx)
-{
-	uint32_t lim = k->nkr_num_slots - 1;
-	uint32_t lease_idx = k->nkr_lease_idx;
-
-	k->nkr_leases[lease_idx] = NR_NOSLOT;
-	k->nkr_lease_idx = nm_next(lease_idx, lim);
-
-	if (n > nm_kr_space(k, is_rx)) {
-		D("invalid request for %d slots", n);
-		panic("x");
-	}
-	/* XXX verify that there are n slots */
-	k->nkr_hwlease += n;
-	if (k->nkr_hwlease > lim)
-		k->nkr_hwlease -= lim + 1;
-
-	if (k->nkr_hwlease >= k->nkr_num_slots ||
-		k->nr_hwcur >= k->nkr_num_slots ||
-		k->nr_hwtail >= k->nkr_num_slots ||
-		k->nkr_lease_idx >= k->nkr_num_slots) {
-		D("invalid kring %s, cur %d tail %d lease %d lease_idx %d lim %d",
-			k->na->name,
-			k->nr_hwcur, k->nr_hwtail, k->nkr_hwlease,
-			k->nkr_lease_idx, k->nkr_num_slots);
-	}
-	return lease_idx;
-}
 
 int netmap_bwrap_intr_notify(struct netmap_kring *kring, int flags);
 int netmap_vp_rxsync(struct netmap_kring *kring, int flags);

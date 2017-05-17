@@ -1288,19 +1288,6 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 
 			slot->len = len;
 			slot->flags = kring->nkr_slot_flags;
-#if 0
-			if (skb_is_nonlinear(m)) {
-				struct stackmap_cb *scb;
-
-			       	scb = STACKMAP_CB_FRAG(m, NETMAP_BUF_SIZE(na));
-				if (stackmap_cb_valid(scb)) {
-					D("queued xmit nmb %p orig slot %p", NMB(na, scb->slot), scb->slot);
-					/* free source slot */
-					scb->slot->flags |= NS_RELEASED;
-					bzero(scb, sizeof(*scb));
-				}
-			}
-#endif /* 0 */
 			nm_i = nm_next(nm_i, lim);
 			mbq_enqueue(&fq, m);
 		}
