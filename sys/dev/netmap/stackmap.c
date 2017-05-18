@@ -301,6 +301,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif
 	u_int nonfree_num = 0;
 	uint32_t *nonfree;
+	u_int count = 0;
 
 	ft = stackmap_get_bdg_fwd(kring);
 #ifdef STACKMAP_FT_SCB
@@ -329,7 +330,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
-		RD(1, "rx");
 	}
 
 	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
@@ -362,7 +362,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		    (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
 			STMD(1, STMD_Q, "state %d", stackmap_cb_get_state(scb));
-			continue;
+			//continue;
 		}
 		stackmap_cb_invalidate(scb);
 		scbw(scb, kring, slot);
@@ -372,8 +372,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
 			break;
 		}
+		count++;
 	}
-	RD(1, "lease %u k %u head %u", kring->nkr_hwlease, k, rhead);
 	kring->nkr_hwlease = k;
 
 	/* Now, we know how many packets go to the receiver
@@ -420,7 +420,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		rxkring->nkr_hwlease = i;
 	} else if (ft->npkts < howmany)
 		howmany = ft->npkts;
-	RD(1, "ft->npkts %u howmany %u", ft->npkts, howmany);
 
 	for (n = 0; n < ft->nfds; n++) {
 #ifdef STACKMAP_FT_SCB
@@ -455,6 +454,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				scbw(scb, rxkring, rs);
 			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
 				stackmap_cb_invalidate(scb);
+			} else {
+				if (!rx && !host)
+					D("2nd pass, state %u", stackmap_cb_get_state(scb));
 			}
 			tmp = *rs;
 			*rs = *ts;
@@ -484,7 +486,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		ft->nfds -= n;
 		ft->npkts -= sent;
-		RD(1, "sent %d packets", sent);
 #endif
 	}
 
@@ -510,7 +511,21 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
-			if (kring->ring->slot[j].len > 0) // not sent
+#if 0
+			struct netmap_slot *slot = &kring->ring->slot[j];
+			struct stackmap_cb *scb;
+		       
+			if (!slot->len)
+				continue;
+			scb = STACKMAP_CB_NMB(NMB(na, slot),
+					NETMAP_BUF_SIZE(na));
+			if (!(stackmap_cb_valid(scb) &&
+			    stackmap_cb_get_state(scb) == SCB_M_NOREF))
+				break;
+			RD(1, "processing leftover state %u",
+					stackmap_cb_get_state(scb));
+#endif
+			if (kring->ring->slot[j].len > 0)
 				break;
 		}
 		k = j;
@@ -645,11 +660,11 @@ csum_transmit:
 		struct stackmap_cb *scb2;
 		int i, n = skb_shinfo(m)->nr_frags;
 
-		STMD(STMD_Q, 0, "queued xmit");
 		for (i = 0; i < n; i++) {
 			scb2 = STACKMAP_CB_EXT(m, i, NETMAP_BUF_SIZE(na));
 			stackmap_cb_invalidate(scb2);
-			STMD(STMD_Q, 0, "frag[%d] scb %p flags 0x%08x",
+			STMD(STMD_Q, 0,
+				"queued xmit frag[%d] scb %p flags 0x%08x",
 					i, scb2, scb2->flags);
 		}
 		slot->len = 0; // XXX
@@ -666,6 +681,7 @@ csum_transmit:
 		/* Length is already validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
+		RD(1, "mismatch %d, copy entire data", mismatch);
 		STMD(STMD_TX, 1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}

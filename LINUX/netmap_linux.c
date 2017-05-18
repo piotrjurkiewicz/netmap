@@ -813,7 +813,7 @@ u_int nm_os_hw_headroom(struct ifnet *ifp)
  * are always sent after queueing. Thus, if this destructor is called
  * for such segments, it's wrong.
  */
- 
+
 void
 nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	bool zerocopy_success)
@@ -824,13 +824,15 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	scb = container_of(u, struct stackmap_cb, ui);
 	if (!zerocopy_success) {
 		//panic("x");
-		STMD(STMD_TX, 0, "!zerocopy_success (scb %p)", scb);
-	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED)
-		panic("data_destructor on M_QUEUED scb");
+		STMD(STMD_TX, 0, "!zerocopy (scb %p)", scb);
+	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
+		/* This probably happens for the case that a
+		 * queued packet has been merged to another one
+		 */
+		STMD(STMD_Q, 0, "data_destructor on scb %p M_QUEUED", scb);
+	}
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	STMD(STMD_TX, 0,
-		"scb %p (zerocopy_success %d)", scb, zerocopy_success);
-	/* we may have subsequent frags */
+	STMD(STMD_TX, 0, "scb %p (zerocopy %d)", scb, zerocopy_success);
 }
 
 void
@@ -948,7 +950,6 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
 	STMDPKT(STMD_RX, 0, m->data);
-	RD(1, "");
 	m->protocol = eth_type_trans(m, m->dev);
 
 	/* set mbuf destructor to detect this mbuf consumed */
