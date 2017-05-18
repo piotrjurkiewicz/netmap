@@ -154,11 +154,11 @@ struct stackmap_bdgfwd {
 
 /* TODO: avoid linear search... */
 int
-stackmap_extra_enqueue(struct netmap_adapter *na, struct netmap_slot *slot)
+stackmap_extra_enqueue(struct netmap_kring *kring, struct netmap_slot *slot)
 {
-	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
-	struct netmap_slot *slots = sna->extra_slots;
-	int i, n = sna->extra_num;
+	struct netmap_adapter *na = kring->na;
+	struct netmap_slot *slots = kring->extra->slots;
+	int i, n = kring->extra->num;
 
 	for (i = 0; i < n; i++) {
 		struct netmap_slot *extra = &slots[i];
@@ -353,7 +353,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
 			/* hold by the stack and sits on this ring */
-			if (stackmap_extra_enqueue(na, slot))
+			if (stackmap_extra_enqueue(kring, slot))
 				break;
 			continue;
 		}
@@ -366,8 +366,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		stackmap_cb_invalidate(scb);
 		scbw(scb, kring, slot);
-		error = rx ? nm_os_stackmap_recv(na, slot) :
-			     nm_os_stackmap_send(na, slot);
+		error = rx ? nm_os_stackmap_recv(kring, slot) :
+			     nm_os_stackmap_send(kring, slot);
 		if (unlikely(error)) {
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
 			break;
@@ -498,7 +498,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
-		if (stackmap_extra_enqueue(na, slot)) {
+		if (stackmap_extra_enqueue(kring, slot)) {
 			/* Prevent this and subsequent buffers from being 
 			 * reclaimed.
 			 */
@@ -956,13 +956,104 @@ stackmap_bdg_config(struct nm_ifreq *ifr,
 	return stackmap_register_fd(na, fd);
 }
 
+
 #define STACKMAP_NUM_EXTRA_BUFS	4
 //static uint32_t stackmap_extra_bufs[STACKMAP_NUM_EXTRA_BUFS+1];
+//
+//
+static void
+stackmap_extra_free(struct netmap_adapter *na)
+{
+	enum txrx t;
+
+	for_rx_tx(t) {
+		int i;
+
+		for (i = 0; i < netmap_real_rings(na, t); i++) {
+			struct netmap_kring *kring = &NMR(na, t)[i];
+			struct extra_pool *extra;
+
+			if (!kring->extra)
+				continue;
+			extra = kring->extra;
+			if (extra->slots)
+				nm_os_free(extra->slots);
+			if (extra->num) {
+				int j;
+
+				/* Build a returning buffer list */
+				for (j = 0; j < extra->num; j++) {
+					u_int idx = extra->slots[j].buf_idx;
+					if (idx >= 2)
+						extra->bufs[j] = idx;
+				}
+				netmap_extra_free(na, extra->bufs, 1);
+				nm_os_free(extra->bufs);
+			}
+			extra->num = 0;
+			nm_os_free(extra);
+		}
+	}
+}
+
+static int
+stackmap_extra_alloc(struct netmap_adapter *na)
+{
+	enum txrx t;
+
+	for_rx_tx(t) {
+		int i;
+
+		/* XXX probably we don't need extra on host rings */
+		for (i = 0; i < netmap_real_rings(na, t); i++) {
+			struct netmap_kring *kring = &NMR(na, t)[i];
+			struct extra_pool *extra;
+			uint32_t *extra_bufs;
+			struct netmap_slot *extra_slots;
+			u_int want = STACKMAP_NUM_EXTRA_BUFS, n, j;
+
+			extra = nm_os_malloc(sizeof(*kring->extra));
+			if (!extra)
+				break;
+			kring->extra = extra;
+
+			extra_bufs = nm_os_malloc(sizeof(*extra_bufs) *
+					(want + 1));
+			if (!extra_bufs)
+				break;
+			kring->extra->bufs = extra_bufs;
+
+			n = netmap_extra_alloc(na, extra_bufs, want, 1);
+			if (n < want)
+				D("allocated only %u bufs", n);
+			kring->extra->num = n;
+
+			extra_slots = nm_os_malloc(sizeof(*extra_slots) * n);
+			if (!extra_slots)
+				break;
+			for (j = 0; j < n; j++) {
+				struct netmap_slot *slot;
+
+				slot = &extra_slots[j];
+				slot->buf_idx = extra_bufs[j];
+				slot->len = 0;
+			}
+			kring->extra->slots = extra_slots;
+		}
+		/* rollaback on error */
+		if (i < netmap_real_rings(na, t)) {
+			stackmap_extra_free(na);
+			return ENOMEM;
+		}
+	}
+	return 0;
+}
+
 int
 stackmap_reg(struct netmap_adapter *na, int onoff)
 {
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
-	int i, err;
+	int err;
 
 	D("%s (%p) onoff %d suffix: %s",
 		na->name, sna, onoff,
@@ -971,42 +1062,10 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 	if (err)
 		return err;
 	if (onoff) {
-		uint32_t *extra_bufs, n;
-		struct netmap_slot *extra_slots;
 		struct netmap_bdg_ops ops
 			= {NULL, stackmap_bdg_config, stackmap_bdg_dtor};
-
-		/* one extra to store the terminating 0 */
-		extra_bufs = nm_os_malloc(sizeof(uint32_t)
-		    * STACKMAP_NUM_EXTRA_BUFS + 1);
-		if (!extra_bufs) {
-			sna->save_reg(na, 0);
-			return ENOMEM;
-		}
-		n = netmap_extra_alloc(na, extra_bufs,
-			STACKMAP_NUM_EXTRA_BUFS, 1);
-		if (n < STACKMAP_NUM_EXTRA_BUFS)
-			D("allocated only %d bufs", n);
-		extra_slots = nm_os_malloc(
-		    sizeof(struct netmap_slot) * n);
-		if (!extra_slots) {
-			D("malloc failed for extra slots");
-			netmap_extra_free(na, extra_bufs, 1);
-			sna->save_reg(na, 0);
-			nm_os_free(extra_bufs);
-			return ENOMEM;
-		}
-		for (i = 0; i < n; i++) {
-			struct netmap_slot *slot;
-		       
-			slot = &extra_slots[i];
-			slot->buf_idx = extra_bufs[i];
-			slot->len = 0;
-		}
-		sna->extra_bufs = extra_bufs;
-		sna->extra_num = n;
-		sna->extra_slots = extra_slots;
-
+		if (stackmap_extra_alloc(na))
+			return err;
 		/* install config handler */
 		netmap_bdg_set_ops(sna->up.na_bdg, &ops);
 #ifdef STACKMAP_CB_TAIL
@@ -1020,16 +1079,6 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 
 		return stackmap_reg_slaves(na);
 	}
-
-	/* Build a returning buffer list */
-	for (i = 0; i < sna->extra_num; i++) {
-		u_int idx = sna->extra_slots[i].buf_idx;
-		if (idx >= 2)
-			sna->extra_bufs[i] = idx;
-	}
-	nm_os_free(sna->extra_slots);
-	netmap_extra_free(na, sna->extra_bufs, 1);
-	nm_os_free(sna->extra_bufs);
 	stackmap_unreg_slaves(na);
 	return 0;
 }

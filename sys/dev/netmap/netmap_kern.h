@@ -356,6 +356,14 @@ struct netmap_zmon_list {
 };
 #endif /* WITH_MONITOR */
 
+#ifdef WITH_STACK
+struct extra_pool {
+	u_int num;
+	uint32_t *bufs;
+	struct netmap_slot *slots;
+};
+#endif /* WITH_STACK */
+
 /*
  * private, kernel view of a ring. Keeps track of the status of
  * a ring across system calls.
@@ -525,6 +533,7 @@ struct netmap_kring {
 	int (*save_notify)(struct netmap_kring *kring, int flags);
 #endif
 #ifdef WITH_STACK
+	struct extra_pool	*extra;
 	uint32_t	nkr_ft_cur; /* used in stackmap */
 #endif /* WITH_STACK */
 
@@ -1072,9 +1081,6 @@ struct stackmap_adapter {
 	struct netmap_vp_adapter up;
 	//NM_LIST_HEAD sk_adapters;
 	int (*save_reg)(struct netmap_adapter *na, int onoff);
-	uint32_t *extra_bufs;
-	struct netmap_slot *extra_slots;
-	u_int extra_num;
 	char suffix[NETMAP_SUFFIX_LEN];	/* copy of nr_suffix in nmr */
 	void *save_sk_data_ready;
 	struct net_device_ops stackmap_ndo;
@@ -2106,10 +2112,10 @@ extern int stackmap_verbose;
 	} while (0)
 
 //struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
-int nm_os_stackmap_recv(struct netmap_adapter *, struct netmap_slot *);
-int nm_os_stackmap_send(struct netmap_adapter *, struct netmap_slot *);
+int nm_os_stackmap_recv(struct netmap_kring *, struct netmap_slot *);
+int nm_os_stackmap_send(struct netmap_kring *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
-int stackmap_extra_enqueue(struct netmap_adapter *, struct netmap_slot *);
+int stackmap_extra_enqueue(struct netmap_kring *, struct netmap_slot *);
 #endif /* WITH_STACK */
 
 /* Shared declarations for the VALE switch. */

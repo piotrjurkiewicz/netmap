@@ -934,8 +934,9 @@ linux_stackmap_mbuf_destructor(struct mbuf *m)
 
 /* scb must has been populated */
 int
-nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
+nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 {
+	struct netmap_adapter *na = kring->na;
 	char *nmb = NMB(na, slot);
 	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	struct mbuf *m;
@@ -966,7 +967,7 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 				nm_os_stackmap_mbuf_data_destructor);
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (stackmap_extra_enqueue(scb_kring(scb)->na, scb_slot(scb))) {
+		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
 			STMD(STMD_Q, 0,
 				"no extra space for nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
@@ -982,17 +983,19 @@ nm_os_stackmap_recv(struct netmap_adapter *na, struct netmap_slot *slot)
 }
 
 int
-nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
+nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 {
+	struct netmap_adapter *na = kring->na;
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_cb *scb;
 	struct page *page;
 	u_int poff, len;
 	NM_SOCK_T *sk;
-	void *nmb = NMB(na, slot);
+	void *nmb;
 	int err;
 	int pageref = 0;
 
+	nmb = NMB(na, slot);
 	ska = stackmap_ska_from_fd(na, slot->fd);
 	if (unlikely(!ska)) {
 		D("no ska for fd %d (na %s)", slot->fd, na->name);
@@ -1037,7 +1040,7 @@ nm_os_stackmap_send(struct netmap_adapter *na, struct netmap_slot *slot)
 		}
 		STMD(STMD_Q, 0, "enqueuing scb %p flags 0x%08x", scb, scb->flags);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (stackmap_extra_enqueue(na, slot)) {
+		if (stackmap_extra_enqueue(kring, slot)) {
 			return -EBUSY;
 		}
 		return -EBUSY; // suppress following packets
