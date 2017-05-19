@@ -1674,6 +1674,7 @@ sender_body(void *data)
 			nexttime = timespec_add(nexttime, targ->g->tx_period);
 			wait_time(nexttime);
 		}
+		RD(1, "in main loop");
 
 		/*
 		 * wait for available room in the send queue(s)

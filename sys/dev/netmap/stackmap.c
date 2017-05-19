@@ -301,7 +301,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif
 	u_int nonfree_num = 0;
 	uint32_t *nonfree;
-	u_int count = 0;
 
 	ft = stackmap_get_bdg_fwd(kring);
 #ifdef STACKMAP_FT_SCB
@@ -352,16 +351,22 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			continue;
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
+			RD(1, "WARNING: QUEUED on k %u (lease %u head %u)",
+					k, kring->nkr_hwlease, rhead);
 			/* hold by the stack and sits on this ring */
-			if (stackmap_extra_enqueue(kring, slot))
+			if (stackmap_extra_enqueue(kring, slot)) {
+				k = nm_next(k, lim_tx);
 				break;
+			}
 			continue;
 		}
 		/* XXX Figure out why this happens */
 		if (!rx &&
 		    (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
-			STMD(1, STMD_Q, "state %d", stackmap_cb_get_state(scb));
+			RD(1, "WARNING: %u on k %u (lease %u head %u) in TX",
+					stackmap_cb_get_state(scb), k,
+					kring->nkr_hwlease, rhead);
 			//continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -369,12 +374,13 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
 			     nm_os_stackmap_send(kring, slot);
 		if (unlikely(error)) {
+			/* treat this buffer has been processed */
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
+			k = nm_next(k, lim_tx);
 			break;
 		}
-		count++;
 	}
-	kring->nkr_hwlease = k;
+	kring->nkr_hwlease = k; // next position to throw into the stack
 
 	/* Now, we know how many packets go to the receiver
 	 * On TX we can drop packets with handling packets with 
@@ -456,7 +462,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				stackmap_cb_invalidate(scb);
 			} else {
 				if (!rx && !host)
-					D("2nd pass, state %u", stackmap_cb_get_state(scb));
+					D("2nd pass, state %u",
+						stackmap_cb_get_state(scb));
 			}
 			tmp = *rs;
 			*rs = *ts;
@@ -511,7 +518,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
-#if 0
 			struct netmap_slot *slot = &kring->ring->slot[j];
 			struct stackmap_cb *scb;
 		       
@@ -519,13 +525,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				continue;
 			scb = STACKMAP_CB_NMB(NMB(na, slot),
 					NETMAP_BUF_SIZE(na));
-			if (!(stackmap_cb_valid(scb) &&
-			    stackmap_cb_get_state(scb) == SCB_M_NOREF))
-				break;
-			RD(1, "processing leftover state %u",
-					stackmap_cb_get_state(scb));
-#endif
-			if (kring->ring->slot[j].len > 0)
+			if (!stackmap_cb_valid(scb)) {
+				D("invalidated scb %u?", j);
+				continue;
+			}
+			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
 				break;
 		}
 		k = j;
@@ -566,6 +570,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
 			hwkring = NMR(hwna, NR_RX) +
 				(na->num_tx_rings > me ? me : 0);
+			STMD(STMD_Q, 1, "intr");
 			netmap_bwrap_intr_notify(hwkring, flags);
 		}
 	}
@@ -587,9 +592,19 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	done = (na == stackmap_master(na) || stackmap_is_host(na)) ?
 	       	stackmap_bdg_flush(kring) : stackmap_bdg_rx(kring);
 		*/
+	/*
+	if (((struct stackmap_adapter *)na)->counter > 5700 && !stackmap_is_host(na))
+		D("start %u", ((struct stackmap_adapter *)na)->counter);
+		*/
 	done = stackmap_bdg_flush(kring);
+	//if (kring->nr_hwcur == done)
+	ND(1, "hwcur from %u to %u (head %u)", kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
+	/*
+	if (((struct stackmap_adapter *)na)->counter > 5700 && !stackmap_is_host(na))
+		D("end %u", ((struct stackmap_adapter *)na)->counter);
+		*/
 	return 0;
 }
 
@@ -662,7 +677,8 @@ csum_transmit:
 
 		for (i = 0; i < n; i++) {
 			scb2 = STACKMAP_CB_EXT(m, i, NETMAP_BUF_SIZE(na));
-			stackmap_cb_invalidate(scb2);
+			stackmap_cb_set_state(scb2, SCB_M_NOREF);
+			//stackmap_cb_invalidate(scb2);
 			STMD(STMD_Q, 0,
 				"queued xmit frag[%d] scb %p flags 0x%08x",
 					i, scb2, scb2->flags);
