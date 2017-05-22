@@ -1087,6 +1087,8 @@ struct stackmap_adapter {
 	struct stackmap_sk_adapter **sk_adapters;
 #define DEFAULT_SK_ADAPTERS	65535
 	u_int sk_adapters_max;
+	u_int num_proc;
+	u_int num_sent;
 };
 
 /* to be embedded in the buf */
