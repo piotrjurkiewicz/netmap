@@ -350,6 +350,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			STMDPKT(STMD_HOST, 0, nmb + na->virt_hdr_len);
 			continue;
 		}
+#if 0
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
 			RD(1, "WARNING: QUEUED on k %u (lease %u head %u)",
 					k, kring->nkr_hwlease, rhead);
@@ -361,14 +362,12 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			continue;
 		}
 		/* XXX Figure out why this happens */
-		if (!rx &&
-		    (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
-		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
-			RD(1, "WARNING: %u on k %u (lease %u head %u) in TX",
-					stackmap_cb_get_state(scb), k,
-					kring->nkr_hwlease, rhead);
+		if (!rx && stackmap_cb_get_state(scb) == SCB_M_TXREF) {
+			RD(1, "WARNING: TXREF on k %u (lease %u head %u) in TX",
+					k, kring->nkr_hwlease, rhead);
 			//continue;
 		}
+#endif /* 0 */
 		stackmap_cb_invalidate(scb);
 		scbw(scb, kring, slot);
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
@@ -661,6 +660,10 @@ csum_transmit:
 	}
 
 	/* Valid scb, txsync-ing packet. */
+	KASSERT(scb_kring(scb),
+		("slot NULL in scb %p state 0x%08x", scb, scb->flags));
+	KASSERT(scb_kring(scb),
+		("kring NULL in scb %p state 0x%08x", scb, scb->flags));
 	slot = scb_slot(scb);
 	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 	       	/* originated by netmap but has been queued in either extra
@@ -694,7 +697,7 @@ csum_transmit:
 		/* Length is already validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
-		RD(1, "mismatch %d, copy entire data", mismatch);
+		D("mismatch %d (off %u hlen %u), copy entire data", mismatch, slot->offset, MBUF_HEADLEN(m));
 		STMD(STMD_TX, 1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 	}
@@ -715,6 +718,8 @@ csum_transmit:
 		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 
+	KASSERT(scb_kring(scb),
+		("kring NULL (2) in scb %p state 0x%08x", scb, scb->flags));
 	stackmap_add_fdtable(scb, scb_kring(scb));
 
 	/* We don't know when the stack actually releases the data;
