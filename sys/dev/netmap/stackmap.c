@@ -301,7 +301,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif
 	u_int nonfree_num = 0;
 	uint32_t *nonfree;
-	struct stackmap_adapter *sna = NULL;
 
 	ft = stackmap_get_bdg_fwd(kring);
 #ifdef STACKMAP_FT_SCB
@@ -331,8 +330,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		rxna = stackmap_master(na);
 		rx = 1;
 	}
-	if (!rx && !host)
-		sna = (struct stackmap_adapter *)na;
 
 	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
 		struct netmap_slot *slot = &kring->ring->slot[k];
@@ -354,8 +351,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			continue;
 		}
 		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED)) {
-			RD(1, "WARNING: QUEUED on k %u (lease %u head %u nproc %u nsent %u)",
-					k, kring->nkr_hwlease, rhead, sna? sna->num_proc:0 , sna? sna->num_sent:0);
+			RD(1, "WARNING: QUEUED on k %u (lease %u head %u)",
+					k, kring->nkr_hwlease, rhead);
 			/* hold by the stack and sits on this ring */
 			if (stackmap_extra_enqueue(kring, slot)) {
 				k = nm_next(k, lim_tx);
@@ -367,17 +364,15 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (!rx &&
 		    (stackmap_cb_get_state(scb) == SCB_M_NOREF ||
 		    stackmap_cb_get_state(scb) == SCB_M_TXREF)) {
-			RD(1, "WARNING: %u on k %u (lease %u head %u nproc %u nsent %u) in TX",
+			RD(1, "WARNING: %u on k %u (lease %u head %u) in TX",
 					stackmap_cb_get_state(scb), k,
-					kring->nkr_hwlease, rhead, sna? sna->num_proc:0, sna? sna->num_sent:0);
+					kring->nkr_hwlease, rhead);
 			//continue;
 		}
 		stackmap_cb_invalidate(scb);
 		scbw(scb, kring, slot);
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
 			     nm_os_stackmap_send(kring, slot);
-		if (!rx && !host)
-			sna->num_proc++;
 		if (unlikely(error)) {
 			/* treat this buffer has been processed */
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
@@ -422,7 +417,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scb = STACKMAP_CB_NMB(NMB(rxna, slot),
 					NETMAP_BUF_SIZE(rxna));
 			if (!stackmap_cb_valid(scb)) {
-				RD(1, "WARNING: invalid scb on rx slot %u nproc %u nsent %u", i, sna?sna->num_proc:0, sna?sna->num_sent:0);
+				RD(1, "WARNING: invalid scb on rx slot %u", i);
 				continue;
 			}
 			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
@@ -484,8 +479,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			rs->flags |= NS_BUF_CHANGED;
 			j = nm_next(j, lim_rx);
 			sent++;
-			if (!rx && !host)
-				sna->num_sent++;
 		} while (--howmany && next != STACKMAP_FT_NULL);
 		bq->bq_head = next; // no NULL if howmany has run out
 #ifndef STACKMAP_FT_SCB
@@ -604,19 +597,11 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	done = (na == stackmap_master(na) || stackmap_is_host(na)) ?
 	       	stackmap_bdg_flush(kring) : stackmap_bdg_rx(kring);
 		*/
-	/*
-	if (((struct stackmap_adapter *)na)->counter > 5700 && !stackmap_is_host(na))
-		D("start %u", ((struct stackmap_adapter *)na)->counter);
-		*/
 	done = stackmap_bdg_flush(kring);
 	//if (kring->nr_hwcur == done)
 	ND(1, "hwcur from %u to %u (head %u)", kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
-	/*
-	if (((struct stackmap_adapter *)na)->counter > 5700 && !stackmap_is_host(na))
-		D("end %u", ((struct stackmap_adapter *)na)->counter);
-		*/
 	return 0;
 }
 
@@ -1121,7 +1106,6 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 		//netmap_mem_set_buf_offset(na->nm_mem, na->virt_hdr_len);
 #endif /* NETMAP_MEM_MAPPING */
 
-		sna->num_proc = sna->num_sent = 0;
 		return stackmap_reg_slaves(na);
 	}
 	stackmap_unreg_slaves(na);
