@@ -415,22 +415,20 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 
 			scb = STACKMAP_CB_NMB(NMB(rxna, slot),
 					NETMAP_BUF_SIZE(rxna));
-			if (!stackmap_cb_valid(scb)) {
-				RD(1, "WARNING: invalid scb on rx slot %u", i);
-				continue;
-			}
-			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
+			if (stackmap_cb_valid(scb) &&
+			    stackmap_cb_get_state(scb) != SCB_M_NOREF)
 				break;
 		}
 		if (!n) {
-			RD(1, "not claimed anything on rxring");
-			//STMD(STMD_Q, 1, "not claimed anything on rxring");
+			STMD(STMD_Q, 1, "not claimed anything on rxring");
 		}
 		howmany += n;
 		rxkring->nkr_hwlease = i;
 	} else if (ft->npkts < howmany)
 		howmany = ft->npkts;
 
+	if (!howmany && ft->nfds)
+		D("no howmany (npkts %u nfds %u)", ft->npkts, ft->nfds);
 	for (n = 0; n < ft->nfds; n++) {
 #ifdef STACKMAP_FT_SCB
 		struct stackmap_bdg_q *bq;
@@ -520,6 +518,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 	}
 
+	if (ft->npkts >= kring->nkr_num_slots)
+		D("kring stuck");
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
 			struct netmap_slot *slot = &kring->ring->slot[j];
@@ -580,6 +580,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 	}
 	return 0;
 }
+
 
 static int
 stackmap_txsync(struct netmap_kring *kring, int flags)
@@ -653,17 +654,13 @@ csum_transmit:
 		STMDPKT(STMD_Q, 0, m->data);
 	}
 	scb = STACKMAP_CB_EXT(m, 0, NETMAP_BUF_SIZE(na));
-	if (unlikely(!stackmap_cb_valid(scb))) {
+	if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
 		STMD(STMD_TX, 0, "nonlinear nonsendpage scb %p", scb);
 		skb_linearize(m); // XXX
 		goto csum_transmit;
 	}
 
 	/* Valid scb, txsync-ing packet. */
-	KASSERT(scb_kring(scb),
-		("slot NULL in scb %p state 0x%08x", scb, scb->flags));
-	KASSERT(scb_kring(scb),
-		("kring NULL in scb %p state 0x%08x", scb, scb->flags));
 	slot = scb_slot(scb);
 	if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 	       	/* originated by netmap but has been queued in either extra
@@ -692,14 +689,17 @@ csum_transmit:
 	STMD(STMD_TX, 0, "direct scb %p", scb);
 
 	/* bring protocol headers in */
-	mismatch = (int)slot->offset - MBUF_HEADLEN(m);
+	mismatch = MBUF_HEADLEN(m) - (int)slot->offset;
 	if (!mismatch) {
 		/* Length is already validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
-		D("mismatch %d (off %u hlen %u), copy entire data", mismatch, slot->offset, MBUF_HEADLEN(m));
+		D("mismatch %d (slot %u off %u hlen %u), copy entire data",
+				mismatch, slot->offset, MBUF_HEADLEN(m),
+				(u_int)(slot - scb_kring(scb)->ring->slot));
 		STMD(STMD_TX, 1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
+		slot->len += mismatch;
 	}
 
 	if (nm_os_mbuf_has_offld(m)) {
@@ -718,8 +718,6 @@ csum_transmit:
 		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 
-	KASSERT(scb_kring(scb),
-		("kring NULL (2) in scb %p state 0x%08x", scb, scb->flags));
 	stackmap_add_fdtable(scb, scb_kring(scb));
 
 	/* We don't know when the stack actually releases the data;
