@@ -1013,7 +1013,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 
 	/* let the stack to manage the buffer */
-	err = kernel_sendpage(sk->sk_socket, page, poff, len, 0);
+	err = kernel_sendpage(sk->sk_socket, page, poff, len, MSG_DONTWAIT);
 	if (unlikely(err < 0)) {
 		/* Treat as if this buffer is consumed, hoping mbuf to
 		 * be freed.
