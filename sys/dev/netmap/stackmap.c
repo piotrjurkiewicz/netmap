@@ -404,6 +404,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		goto unlock_out;
 	}
 	howmany = stackmap_kr_rxspace(rxkring); // we don't use lease
+	/* stuck */
 	if (howmany < ft->npkts) {
 		/* Want more buffers - reclaim completed ones */
 		u_int i;
@@ -427,8 +428,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else if (ft->npkts < howmany)
 		howmany = ft->npkts;
 
-	if (!howmany && ft->nfds)
-		D("no howmany (npkts %u nfds %u)", ft->npkts, ft->nfds);
 	for (n = 0; n < ft->nfds; n++) {
 #ifdef STACKMAP_FT_SCB
 		struct stackmap_bdg_q *bq;
@@ -462,10 +461,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 				scbw(scb, rxkring, rs);
 			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
 				stackmap_cb_invalidate(scb);
-			} else {
-				if (!rx && !host)
-					D("2nd pass, state %u",
-						stackmap_cb_get_state(scb));
 			}
 			tmp = *rs;
 			*rs = *ts;
@@ -518,8 +513,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 	}
 
-	if (ft->npkts >= kring->nkr_num_slots)
-		D("kring stuck");
 	if (ft->npkts) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
 			struct netmap_slot *slot = &kring->ring->slot[j];
