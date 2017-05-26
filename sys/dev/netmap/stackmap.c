@@ -373,9 +373,10 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
 			     nm_os_stackmap_send(kring, slot);
 		if (unlikely(error)) {
-			/* treat this buffer has been processed */
+			/* Must be EBUSY or EAGAIN */
 			STMD(STMD_TX, 0, "early break on %s", rx ? "rx" : "tx");
-			k = nm_next(k, lim_tx);
+			if (error == -EBUSY)
+				k = nm_next(k, lim_tx);
 			break;
 		}
 	}

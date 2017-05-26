@@ -1026,6 +1026,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 		STMD(STMD_TX, 0, "error %d in sendpage() slot %ld",
 				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
+		return -EAGAIN;
 	}
 
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
