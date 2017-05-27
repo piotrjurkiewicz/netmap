@@ -328,6 +328,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
 	} else {
 		rxna = stackmap_master(na);
+		local_bh_disable();
 		rx = 1;
 	}
 
@@ -533,6 +534,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		k = j;
 	}
 unlock_out:
+	if (rx)
+		local_bh_enable();
 	netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
