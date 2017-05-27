@@ -37,6 +37,7 @@
 #ifdef NETMAP_LINUX_HAVE_SCHED_MM
 #include <linux/sched/mm.h>
 #endif /* NETMAP_LINUX_HAVE_SCHED_MM */
+#include <net/sock.h> // sock_owned_by_user
 
 #include "netmap_linux_config.h"
 
@@ -810,10 +811,8 @@ u_int nm_os_hw_headroom(struct ifnet *ifp)
 
 /* Releases stack's reference to data
  * We have no way to see subsequent fragments, but such fragments 
- * are always sent after queueing. Thus, if this destructor is called
- * for such segments, it's wrong.
+ * are always sent after queueing.
  */
-
 void
 nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	bool zerocopy_success)
@@ -826,10 +825,8 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 		//panic("x");
 		STMD(STMD_TX, 0, "!zerocopy (scb %p)", scb);
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
-		/* This probably happens for the case that a
-		 * queued packet has been merged to another one
-		 */
-		STMD(STMD_Q, 0, "data_destructor on scb %p M_QUEUED", scb);
+		/* Maybe this data has been merged to another one */
+		STMD(STMD_QUE, 0, "data_destructor on scb %p M_QUEUED", scb);
 	}
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
 	STMD(STMD_TX, 0, "scb %p (zerocopy %d)", scb, zerocopy_success);
@@ -851,11 +848,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	u_int count = 0;
 	struct netmap_kring *kring = NULL;
 
-	/* XXX Out-of-order packets have enqueued in the same round (see
-	 * tcp_data_queue() with an in-order segment with delivered by an
-	 * rxsync context
-	 */
-	/* XXX we should batch this lock outside the function */
+	/* OOO segment(s) might have been enqueued in the same rxsync round */
 	spin_lock_irqsave(&queue->lock, cpu_flags);
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
@@ -864,7 +857,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		__builtin_prefetch(scb);
 		if (!kring) {
 			kring = scb_kring(scb);
-			if (!kring)
+			if (unlikely(!kring))
 				panic("no kring");
 		}
 		/* append this buffer to the scratchpad */
@@ -876,10 +869,10 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		sk_eat_skb(sk, m);
 		count++;
 	}
-	if (count > 1)
-		D("eaten %u packets", count);
+	if (count > 1) {
+		STMD(STMD_RX, 0, "eaten %u packets", count);
+	}
 	spin_unlock_irqrestore(&queue->lock, cpu_flags);
-	//ska->save_sk_data_ready(sk);
 }
 
 NM_SOCK_T *
@@ -888,9 +881,7 @@ nm_os_sock_fget(int fd)
 	int err;
 	struct socket *sock = sockfd_lookup(fd, &err);
 
-	if (!sock)
-		return NULL;
-	return sock->sk;
+	return sock ? sock->sk : NULL;
 }
 
 void
@@ -916,9 +907,7 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	if (!m)
 		return NULL;
 	page = virt_to_page(buf);
-	get_page(page); /* survive __kfree_skb */
-	ND("skb %p data %p page %p ref %d vlen %d",
-		m, buf, page, page_ref_count(page), na->virt_hdr_len);
+	get_page(page); // survive __kfree_skb()
 	m->dev = na->ifp;
 	skb_reserve(m, na->virt_hdr_len); // m->data and tail
 	skb_put(m, len - na->virt_hdr_len); // advance m->tail and m->len
@@ -952,14 +941,10 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	STMDPKT(STMD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 
-	/* set mbuf destructor to detect this mbuf consumed */
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
-
-	/* pass the packet to the stack */
 	netif_receive_skb(m);
 
-	/*
-	 * setting data destructor is only safe after skb_orphan_frag()
+	/* setting data destructor is safe only after skb_orphan_frag()
 	 * in __netif_receive_skb_core().
 	 */
 	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
@@ -969,17 +954,14 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
-			STMD(STMD_Q, 0,
-				"no extra space for nmb %p slot %p scb %p",
+			STMD(STMD_QUE, 0, "no extra room nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		STMD(STMD_Q, 0,
-			"enqueued nmb %p to now this slot is at %p scb %p",
-				NMB(scb_kring(scb)->na, scb_slot(scb)),
-				scb_slot(scb), scb);
-	} /* otherwise it has been consumed or sk_data_ready()-ed */
+		STMD(STMD_QUE, 0, "enqueued nmb %p scb %p",
+				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
+	}
 	return 0;
 }
 
@@ -993,8 +975,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	u_int poff, len;
 	NM_SOCK_T *sk;
 	void *nmb;
-	int err;
-	int pageref = 0;
+	int err, pageref = 0;
 
 	nmb = NMB(na, slot);
 	ska = stackmap_ska_from_fd(na, slot->fd);
@@ -1012,15 +993,12 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 
-	/* let the stack to manage the buffer */
 	err = kernel_sendpage(sk->sk_socket, page, poff, len, MSG_DONTWAIT);
 	if (unlikely(err < 0)) {
-		/* Treat as if this buffer is consumed, hoping mbuf to
-		 * be freed.
-		 */
+		/* XXX check if it is enough to assume EAGAIN only */
 		if (stackmap_cb_get_state(scb) != SCB_M_STACK) {
-			D("sendpage() error with unexpected state %d, panic",
-			 stackmap_cb_get_state(scb));
+			D("sendpage() error with unexpected state %d",
+					stackmap_cb_get_state(scb));
 			panic("x");
 		}
 		STMD(STMD_TX, 0, "error %d in sendpage() slot %ld",
@@ -1030,26 +1008,24 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	}
 
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
-		/*
-		 * XXX The stack might have just dropped the page
+		/* XXX The stack might have just dropped the page
 		 * reference (e.g., linearized in skb_checksum_help()
 		 * of __dev_queue_xmit().
 		 */
 		if (unlikely(pageref == page_ref_count(page))) {
-			STMD(STMD_Q, 0, "just dropped frag ref");
+			D("WARNING: just dropped frag ref");
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
-		STMD(STMD_Q, 0, "enqueuing scb %p flags 0x%08x", scb, scb->flags);
+		STMD(STMD_QUE, 0, "enqueuing scb %p (0x%08x)", scb, scb->flags);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(kring, slot)) {
 			return -EBUSY;
 		}
 		return -EBUSY; // suppress following packets
-	} /* SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
+	} /* usually SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;
 }
-
 #endif /* WITH_STACK */
 
 /* Use ethtool to find the current NIC rings lengths, so that the netmap
