@@ -24,9 +24,6 @@
  * SUCH DAMAGE.
  */
 
-/* TODO:
- * Don't return EBUSY on successful enqueue on send to avoid HoL
- */
 /*
  * common headers
  */

@@ -1022,7 +1022,6 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 		if (stackmap_extra_enqueue(kring, slot)) {
 			return -EBUSY;
 		}
-		return -EBUSY; // suppress following packets
 	} /* usually SCB_M_TXREF (TCP) or SCB_M_NOREF (UDP) */
 	return 0;
 }
