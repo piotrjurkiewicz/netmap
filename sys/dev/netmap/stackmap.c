@@ -546,7 +546,6 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
 			hwkring = NMR(hwna, NR_RX) +
 				(na->num_tx_rings > me ? me : 0);
-			SD(SD_QUE, 1, "intr");
 			netmap_bwrap_intr_notify(hwkring, flags);
 		}
 	}
@@ -565,9 +564,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		done = head;
 		return 0;
 	}
-	//local_bh_disable();
 	done = stackmap_bdg_flush(kring);
-	//local_bh_enable();
 	SD(SD_TX, 0, "hwcur from %u to %u (head %u)",
 			kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
@@ -641,8 +638,7 @@ csum_transmit:
 		for (i = 0; i < n; i++) {
 			scb2 = STACKMAP_CB_EXT(m, i, NETMAP_BUF_SIZE(na));
 			stackmap_cb_set_state(scb2, SCB_M_NOREF);
-			SD(SD_QUE, 0,
-				"queued xmit frag[%d] scb %p flags 0x%08x",
+			SD(SD_QUE, 0, "queued xmit frag[%d] scb %p 0x%08x",
 					i, scb2, scb2->flags);
 		}
 		slot->len = 0; // XXX
