@@ -823,13 +823,13 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	scb = container_of(u, struct stackmap_cb, ui);
 	if (!zerocopy_success) {
 		//panic("x");
-		STMD(STMD_TX, 0, "!zerocopy (scb %p)", scb);
+		SD(SD_TX, 0, "!zerocopy (scb %p)", scb);
 	} else if (stackmap_cb_get_state(scb) == SCB_M_QUEUED) {
 		/* Maybe this data has been merged to another one */
-		STMD(STMD_QUE, 0, "data_destructor on scb %p M_QUEUED", scb);
+		SD(SD_QUE, 0, "data_destructor on scb %p M_QUEUED", scb);
 	}
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
-	STMD(STMD_TX, 0, "scb %p (zerocopy %d)", scb, zerocopy_success);
+	SD(SD_TX, 0, "scb %p (zerocopy %d)", scb, zerocopy_success);
 }
 
 void
@@ -870,7 +870,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		count++;
 	}
 	if (count > 1) {
-		STMD(STMD_RX, 0, "eaten %u packets", count);
+		SD(SD_RX, 0, "eaten %u packets", count);
 	}
 	spin_unlock_irqrestore(&queue->lock, cpu_flags);
 }
@@ -938,7 +938,7 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
-	STMDPKT(STMD_RX, 0, m->data);
+	SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 
 	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
@@ -954,12 +954,12 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
-			STMD(STMD_QUE, 0, "no extra room nmb %p slot %p scb %p",
+			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
 			return -EBUSY;
 		}
-		STMD(STMD_QUE, 0, "enqueued nmb %p scb %p",
+		SD(SD_QUE, 0, "enqueued nmb %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
 	}
 	return 0;
@@ -1001,7 +1001,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 					stackmap_cb_get_state(scb));
 			panic("x");
 		}
-		STMD(STMD_TX, 0, "error %d in sendpage() slot %ld",
+		SD(SD_TX, 0, "error %d in sendpage() slot %ld",
 				err, slot - scb_kring(scb)->ring->slot);
 		stackmap_cb_invalidate(scb);
 		return -EAGAIN;
@@ -1017,7 +1017,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
-		STMD(STMD_QUE, 0, "enqueuing scb %p (0x%08x)", scb, scb->flags);
+		SD(SD_QUE, 0, "enqueuing scb %p (0x%08x)", scb, scb->flags);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(kring, slot)) {
 			return -EBUSY;

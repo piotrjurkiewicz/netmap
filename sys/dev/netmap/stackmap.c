@@ -215,7 +215,7 @@ stackmap_add_fdtable(struct stackmap_cb *scb, struct netmap_kring *kring)
 	scb->next = STACKMAP_FT_NULL;
 #else
 	if (unlikely(ft->npkts > NM_BDG_BATCH_MAX)) {
-		STMD(STMD_QUE, 0, "ft full");
+		SD(SD_QUE, 0, "ft full");
 		return;
 	}
 	i = ft->npkts;
@@ -311,13 +311,13 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 #endif
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
-		STMD(STMD_GEN, 1, "failed to obtain rlock");
+		SD(SD_GEN, 1, "failed to obtain rlock");
 		return k;
 	}
 
 	/* XXX perhaps this is handled later? */
 	if (netmap_bdg_active_ports(vpna->na_bdg) < 3) {
-		STMD(STMD_GEN, 1, "only 1 or 2 active ports");
+		SD(SD_GEN, 1, "only 1 or 2 active ports");
 		goto unlock_out;
 	}
 
@@ -347,7 +347,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			scbw(scb, kring, slot);
 			stackmap_cb_set_state(scb, SCB_M_NOREF);
 			stackmap_add_fdtable(scb, kring);
-			STMDPKT(STMD_HOST, 0, nmb + na->virt_hdr_len);
+			SDPKT(SD_HOST, 0, nmb + na->virt_hdr_len);
 			continue;
 		}
 		stackmap_cb_invalidate(scb);
@@ -356,7 +356,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			     nm_os_stackmap_send(kring, slot);
 		if (unlikely(error)) {
 			/* Must be EBUSY (TX/RX) or EAGAIN (TX) */
-			STMD(STMD_GEN, 1, "%s early break", rx ? "rx" : "tx");
+			SD(SD_GEN, 1, "%s early break", rx ? "rx" : "tx");
 			if (error == -EBUSY)
 				k = nm_next(k, lim_tx);
 			break;
@@ -546,7 +546,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
 			hwkring = NMR(hwna, NR_RX) +
 				(na->num_tx_rings > me ? me : 0);
-			STMD(STMD_QUE, 1, "intr");
+			SD(SD_QUE, 1, "intr");
 			netmap_bwrap_intr_notify(hwkring, flags);
 		}
 	}
@@ -568,7 +568,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	//local_bh_disable();
 	done = stackmap_bdg_flush(kring);
 	//local_bh_enable();
-	STMD(STMD_TX, 0, "hwcur from %u to %u (head %u)",
+	SD(SD_TX, 0, "hwcur from %u to %u (head %u)",
 			kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
@@ -583,7 +583,7 @@ stackmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_slot *slot;
 	int mismatch;
 
-	STMDPKT(STMD_TX, 0, m->data);
+	SDPKT(SD_TX, 0, m->data);
 
 	/* txsync-ing packets are always frags */
 	if (!MBUF_NONLINEAR(m)) {
@@ -612,19 +612,19 @@ csum_transmit:
 					- skb_transport_header(m), check);
 			m->ip_summed = 0;
 		}
-		STMDPKT(STMD_QUE, 0, m->data);
+		SDPKT(SD_QUE, 0, m->data);
 		netmap_transmit(ifp, m);
 		return 0;
 	}
 
 	/* Possibly from sendpage() context */
 	if (skb_shinfo(m)->nr_frags > 1) {
-		STMD(STMD_QUE, 0, "nr_frags %d", skb_shinfo(m)->nr_frags);
-		STMDPKT(STMD_QUE, 0, m->data);
+		SD(SD_QUE, 0, "nr_frags %d", skb_shinfo(m)->nr_frags);
+		SDPKT(SD_QUE, 0, m->data);
 	}
 	scb = STACKMAP_CB_EXT(m, 0, NETMAP_BUF_SIZE(na));
 	if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
-		STMD(STMD_TX, 0, "nonlinear nonsendpage scb %p", scb);
+		SD(SD_TX, 0, "nonlinear nonsendpage scb %p", scb);
 		skb_linearize(m); // XXX
 		goto csum_transmit;
 	}
@@ -641,7 +641,7 @@ csum_transmit:
 		for (i = 0; i < n; i++) {
 			scb2 = STACKMAP_CB_EXT(m, i, NETMAP_BUF_SIZE(na));
 			stackmap_cb_set_state(scb2, SCB_M_NOREF);
-			STMD(STMD_QUE, 0,
+			SD(SD_QUE, 0,
 				"queued xmit frag[%d] scb %p flags 0x%08x",
 					i, scb2, scb2->flags);
 		}
@@ -649,7 +649,7 @@ csum_transmit:
 		MBUF_LINEARIZE(m);
 		goto csum_transmit;
 	}
-	STMD(STMD_TX, 0, "direct scb %p", scb);
+	SD(SD_TX, 0, "direct scb %p", scb);
 
 	/* bring protocol headers in */
 	mismatch = MBUF_HEADLEN(m) - (int)slot->offset;
@@ -657,7 +657,7 @@ csum_transmit:
 		/* Length has already been validated */
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
-		STMD(STMD_TX, 1, "mismatch %d, copy entire data", mismatch);
+		SD(SD_TX, 1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 		slot->len += mismatch;
 	}
@@ -836,7 +836,7 @@ stackmap_unregister_socket(struct stackmap_sk_adapter *ska)
 	stackmap_wsk(NULL, sk);
 	NM_SOCK_UNLOCK(sk);
 	nm_os_free(ska);
-	STMD(STMD_GEN, 0, "unregistered fd %d sk %p", ska->fd, sk);
+	SD(SD_GEN, 0, "unregistered fd %d sk %p", ska->fd, sk);
 }
 
 static void
@@ -846,7 +846,7 @@ stackmap_sk_destruct(NM_SOCK_T *sk)
 	struct stackmap_adapter *sna;
 
 	ska = stackmap_sk(sk);
-	STMD(STMD_GEN, 0, "sk %p ska %p", sk, ska);
+	SD(SD_GEN, 0, "sk %p ska %p", sk, ska);
 	if (ska->save_sk_destruct) {
 		ska->save_sk_destruct(sk);
 	}
@@ -888,7 +888,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		return EINVAL;
 	if (kernel_setsockopt(sk->sk_socket, SOL_TCP, TCP_NODELAY,
 				(char *)&on, sizeof(on)) < 0) {
-		STMD(STMD_GEN, 0, "WARNING: failed setsockopt(TCP_NODELAY)");
+		SD(SD_GEN, 0, "WARNING: failed setsockopt(TCP_NODELAY)");
 	}
 
 	ska = nm_os_malloc(sizeof(*ska));
@@ -910,7 +910,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 
 
 	nm_os_sock_fput(sk);
-	STMD(STMD_GEN, 0, "registered fd %d sk %p ska %p", fd, sk, ska);
+	SD(SD_GEN, 0, "registered fd %d sk %p ska %p", fd, sk, ska);
 	return 0;
 }
 

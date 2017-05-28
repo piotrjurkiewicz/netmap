@@ -2082,7 +2082,7 @@ extern int stackmap_verbose;
 #define NM_TCPEND(p)	(NM_TCPHDR(p) ? (NM_TCPSEQ(p) + \
 			    (NM_IPLEN(p) - NM_IPHLEN(p) - NM_TCPHLEN(p))) : 0)
 #define NM_TCPACK(p)	(NM_TCPHDR(p) ? ntohl(NM_TCPHDR(p)->ack_seq) : 0)
-#define STMDPKT(level, lps, p) \
+#define SDPKT(level, lps, p) \
 	do {\
 		if ((stackmap_verbose & (level)) != (level)) \
 			break;\
@@ -2096,12 +2096,12 @@ extern int stackmap_verbose;
 		    NM_TCPACK(p));\
 	} while (0)
 
-#define STMD_TX		0x01
-#define STMD_RX		0x02
-#define STMD_HOST	0x04
-#define STMD_QUE	0x08
-#define STMD_GEN	0x10
-#define STMD(level, lps, format, ...) \
+#define SD_TX		0x01
+#define SD_RX		0x02
+#define SD_HOST	0x04
+#define SD_QUE	0x08
+#define SD_GEN	0x10
+#define SD(level, lps, format, ...) \
 	do {\
 		if ((stackmap_verbose & (level)) == (level)) { \
 			if (lps) \
