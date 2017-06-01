@@ -1106,7 +1106,7 @@ struct stackmap_cb {
 #define SCB_M_MAGIC		0x12345600	/* XXX do better */
 #define SCB_M_MAGIC_MASK	0xffffff00	/* XXX do better */
 	uint32_t flags;
-	uint32_t next; // used only if STACKMAP_FT_SCB defined
+	uint32_t next;
 } __attribute__((__packed__)); /* 32 byte */
 
 static inline void
