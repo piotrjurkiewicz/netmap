@@ -866,6 +866,10 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		slot->len = skb_headroom(m) + skb_headlen(m);
 		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
 		stackmap_add_fdtable(scb, kring);
+		/* see comment in stackmap_transmit() */
+		stackmap_cb_set_state(scb, SCB_M_TXREF);
+		nm_set_mbuf_data_destructor(m, &scb->ui,
+				nm_os_stackmap_mbuf_data_destructor);
 		sk_eat_skb(sk, m);
 		count++;
 	}
@@ -914,15 +918,6 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	return m;
 }
 
-static void
-linux_stackmap_mbuf_destructor(struct mbuf *m)
-{
-	struct stackmap_cb *scb = STACKMAP_CB(m);
-
-	if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
-		stackmap_cb_set_state(scb, SCB_M_NOREF);
-}
-
 /* scb must has been populated */
 int
 nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
@@ -931,6 +926,7 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	char *nmb = NMB(na, slot);
 	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	struct mbuf *m;
+	int ret = 0;
 
 	m = nm_os_build_mbuf(na, nmb, slot->len);
 	if (!m)
@@ -941,28 +937,28 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 
-	SET_MBUF_DESTRUCTOR(m, linux_stackmap_mbuf_destructor);
+	atomic_add(1, &m->users);
 	netif_receive_skb(m);
 
 	/* setting data destructor is safe only after skb_orphan_frag()
 	 * in __netif_receive_skb_core().
 	 */
-	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
+	if (atomic_read(&m->users) > 1) {
 		/* mbuf alive (our destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
-		SET_MBUF_DESTRUCTOR(m, NULL); // not needed anymore
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
 			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
-			return -EBUSY;
+			ret = -EBUSY;
 		}
 		SD(SD_QUE, 0, "enqueued nmb %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
 	}
-	return 0;
+	m_freem(m);
+	return ret;
 }
 
 int
