@@ -863,8 +863,8 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		/* append this buffer to the scratchpad */
 		slot = scb_slot(scb);
 		slot->fd = stackmap_sk(m->sk)->fd;
-		slot->len = skb_headlen(m);
-		slot->offset = (uint8_t)(m->data - m->head);
+		slot->len = skb_headroom(m) + skb_headlen(m);
+		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
 		stackmap_add_fdtable(scb, kring);
 		sk_eat_skb(sk, m);
 		count++;
