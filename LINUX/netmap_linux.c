@@ -1013,7 +1013,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 		 * of __dev_queue_xmit().
 		 */
 		if (unlikely(pageref == page_ref_count(page))) {
-			D("WARNING: just dropped frag ref");
+			D("WARNING: just dropped frag ref (fd %d)", slot->fd);
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
