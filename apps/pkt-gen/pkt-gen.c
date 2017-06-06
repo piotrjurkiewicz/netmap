@@ -1144,12 +1144,14 @@ send_packets(struct netmap_ring *ring, struct pkt *pkt, void *frame,
 			slot->flags |= NS_INDIRECT;
 			slot->ptr = (uint64_t)((uintptr_t)frame);
 		} else if ((options & OPT_COPY) || buf_changed) {
-			nm_pkt_copy(frame + g->soff, p + g->soff, size);
+			u_int o = 0;
+
 			if (g->soff) {
+				o = g->virt_header + g->soff;
 				slot->offset = g->soff;
 				slot->fd = g->sfd;
-				//*(struct nm_msghdr *)(p + size) = g->nmsg;
 			}
+			nm_pkt_copy(frame + o, p + o, size - o);
 			if (fcnt == nfrags)
 				update_addresses(pkt, g);
 		} else if (options & OPT_MEMCPY) {
