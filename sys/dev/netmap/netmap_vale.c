@@ -1427,11 +1427,11 @@ netmap_bdg_config(struct nmreq *nmr)
 		b = ((struct netmap_vp_adapter *)na)->na_bdg;
 	NMG_UNLOCK();
 	/* Don't call config() with NMG_LOCK() held */
-	BDG_RLOCK(b);
+	BDG_WLOCK(b);
 	if (b->bdg_ops.config != NULL)
 		error = b->bdg_ops.config((struct nm_ifreq *)nmr,
 				(struct netmap_vp_adapter *)na);
-	BDG_RUNLOCK(b);
+	BDG_WUNLOCK(b);
 	if (na) {
 		NMG_LOCK();
 		netmap_adapter_put(na);
