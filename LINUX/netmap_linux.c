@@ -844,7 +844,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 {
 	struct sk_buff_head *queue = &sk->sk_receive_queue;
 	struct sk_buff *m, *tmp;
-	unsigned long cpu_flags;
+	//unsigned long cpu_flags;
 	u_int count = 0;
 	struct netmap_kring *kring = NULL;
 
@@ -943,17 +943,21 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	/* setting data destructor is safe only after skb_orphan_frag()
 	 * in __netif_receive_skb_core().
 	 */
-	if (atomic_read(&m->users) > 1) {
+	if (stackmap_cb_get_state(scb) != SCB_M_NOREF) {
 		/* mbuf alive (our destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
+		/* XXX allocate extra on bwraps 
+		if (!kring->extra)
+			panic("no extra");
 		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
 			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)),
 				scb_slot(scb), scb);
 			ret = -EBUSY;
 		}
+		*/
 		SD(SD_QUE, 0, "enqueued nmb %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
 	}

@@ -247,7 +247,7 @@ stackmap_kr_rxspace(struct netmap_kring *k)
 }
 
 static int
-stackmap_bdg_flush(struct netmap_kring *kring)
+stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 {
 	int k = kring->nr_hwcur, j;
 	const int rhead = kring->rhead;
@@ -269,7 +269,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	leftover = ft->npkts;
 	nonfree = ft->tmp;
 
-	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
+	if (!locked && netmap_bdg_rlock(vpna->na_bdg, na)) {
 		SD(SD_GEN, 1, "failed to obtain rlock");
 		return k;
 	}
@@ -455,7 +455,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 unlock_out:
 	if (rx)
 		local_bh_enable();
-	netmap_bdg_runlock(vpna->na_bdg);
+	if (!locked)
+		netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
 
@@ -508,7 +509,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		done = head;
 		return 0;
 	}
-	done = stackmap_bdg_flush(kring);
+	done = stackmap_bdg_flush(kring, 0);
 	SD(SD_TX, 0, "hwcur from %u to %u (head %u)",
 			kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
@@ -803,6 +804,8 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
 	int on = 1;
+	struct netmap_kring *kring;
+	struct mbuf *m;
 
 	/* first check table size */
 	if (fd >= sna->sk_adapters_max) {
@@ -847,10 +850,22 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	SET_DESTRUCTOR(sk, stackmap_sk_destruct);
 	stackmap_wsk(ska, sk);
 	sna->sk_adapters[fd] = ska;
-
-
-	nm_os_sock_fput(sk);
 	SD(SD_GEN, 0, "registered fd %d sk %p ska %p", fd, sk, ska);
+
+	/* drain receive queue (we are under BDG_WLOCK)
+	 * XXX We cannot survive non-netmap packets to this socket
+	 */
+	m = skb_peek(&sk->sk_receive_queue);
+	if (m) {
+		struct stackmap_cb *scb = STACKMAP_CB(m);
+
+		if (stackmap_cb_valid(scb)) {
+			nm_os_stackmap_data_ready(sk);
+			kring = scb_kring(scb); // XXX assume same across the q
+			stackmap_bdg_flush(kring, 1);
+		}
+	}
+	nm_os_sock_fput(sk);
 	return 0;
 }
 
