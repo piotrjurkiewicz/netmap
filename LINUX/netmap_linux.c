@@ -844,7 +844,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 {
 	struct sk_buff_head *queue = &sk->sk_receive_queue;
 	struct sk_buff *m, *tmp;
-	//unsigned long cpu_flags;
+	unsigned long cpu_flags;
 	u_int count = 0;
 	struct netmap_kring *kring = NULL;
 
@@ -865,6 +865,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headroom(m) + skb_headlen(m);
 		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
+		//D("slot %p hr %u vhl %u", slot, skb_headroom(m), kring->na->virt_hdr_len);
 		stackmap_add_fdtable(scb, kring);
 		/* see comment in stackmap_transmit() */
 		stackmap_cb_set_state(scb, SCB_M_TXREF);
@@ -948,7 +949,6 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		/* XXX allocate extra on bwraps 
 		if (!kring->extra)
 			panic("no extra");
 		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
@@ -957,7 +957,6 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 				scb_slot(scb), scb);
 			ret = -EBUSY;
 		}
-		*/
 		SD(SD_QUE, 0, "enqueued nmb %p scb %p",
 				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
 	}
