@@ -251,7 +251,22 @@ stackmap_kr_rxspace(struct netmap_kring *k)
 	if (busy < 0)
 		busy += k->nkr_num_slots;
 	space = k->nkr_num_slots - 1 - busy;
+	if (space < 0)
+		panic("negative space");
 	return space;
+}
+
+static void
+stackmap_clear_bufs(struct netmap_kring *kring, u_int from, u_int to)
+{
+	u_int lim = kring->nkr_num_slots - 1;
+	u_int bufsiz = NETMAP_BUF_SIZE(kring->na), cur;
+
+	for (cur = from; cur != to; cur = nm_next(cur, lim)) {
+		struct netmap_slot *slot = &kring->ring->slot[cur];
+
+		bzero(NMB(kring->na, slot), 16);
+	}
 }
 
 static int
@@ -387,13 +402,9 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			struct stackmap_cb *scb;
 
 			tmp.buf_idx = next;
-			scb = STACKMAP_CB_NMB(NMB(na, &tmp),bufsiz);
+			scb = STACKMAP_CB_NMB(NMB(na, &tmp), bufsiz);
 			next = scb->next;
 			ts = scb_slot(scb);
-			if (!ts && rx)
-				panic("no ts on rx");
-			else if (!ts && !host)
-				panic("no ts on tx");
 			rs = &rxkring->ring->slot[j];
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 				nonfree[nonfree_num++] = j;
@@ -439,13 +450,6 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
 		if (stackmap_extra_enqueue(kring, slot)) {
-			/* continue on extra slot */
-			if (!((uintptr_t)slot >=
-				(uintptr_t)rxkring->ring->slot &&
-			      (uintptr_t)slot <=
-			      	(uintptr_t)(rxkring->ring->slot + 
-			      	rxkring->ring->num_slots)))
-				continue;
 			/* Don't reclaim on/after this postion */
 			u_int me = slot - rxkring->ring->slot;
 			rxkring->nkr_hwlease = me;
@@ -461,10 +465,9 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			if (!slot->len)
 				continue;
 			scb = STACKMAP_CB_NMB(NMB(na, slot), bufsiz);
-			if (!stackmap_cb_valid(scb)) {
-				D("invalidated scb %u?", j);
-			}
-			if (stackmap_cb_get_state(scb) != SCB_M_NOREF)
+			/* scb can be invalid (e.g., swap-ed in new one) */
+			if (stackmap_cb_valid(scb) &&
+			    stackmap_cb_get_state(scb) != SCB_M_NOREF)
 				break;
 		}
 		k = j;
@@ -474,6 +477,8 @@ unlock_out:
 		local_bh_enable();
 	if (!locked)
 		netmap_bdg_runlock(vpna->na_bdg);
+	/* clear a range from hwcur to k which is swapped out or consumed */
+	//stackmap_clear_bufs(kring, kring->nr_hwcur, nm_next(k, lim_tx));
 	return k;
 }
 
@@ -663,8 +668,6 @@ stackmap_extra_free(struct netmap_adapter *na)
 			if (!kring->extra)
 				continue;
 			extra = kring->extra;
-			if (extra->slots)
-				nm_os_free(extra->slots);
 			if (extra->num) {
 				int j;
 
@@ -678,6 +681,8 @@ stackmap_extra_free(struct netmap_adapter *na)
 				nm_os_free(extra->bufs);
 			}
 			extra->num = 0;
+			if (extra->slots)
+				nm_os_free(extra->slots);
 			nm_os_free(extra);
 		}
 	}
@@ -696,7 +701,7 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 			struct netmap_kring *kring = &NMR(na, t)[i];
 			struct extra_pool *extra;
 			uint32_t *extra_bufs;
-			struct netmap_slot *extra_slots;
+			struct netmap_slot *extra_slots = NULL;
 			u_int want = stackmap_extra, n, j;
 
 			extra = nm_os_malloc(sizeof(*kring->extra));
@@ -715,9 +720,12 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 				D("allocated only %u bufs", n);
 			kring->extra->num = n;
 
-			extra_slots = nm_os_malloc(sizeof(*extra_slots) * n);
-			if (!extra_slots)
-				break;
+			if (n) {
+				extra_slots = nm_os_malloc(sizeof(*extra_slots)
+						* n);
+				if (!extra_slots)
+					break;
+			}
 			for (j = 0; j < n; j++) {
 				struct netmap_slot *slot = &extra_slots[j];
 
@@ -886,7 +894,7 @@ stackmap_unregister_socket(struct stackmap_sk_adapter *ska)
 	if (ska->fd < sna->sk_adapters_max)
 		sna->sk_adapters[ska->fd] = NULL;
 	else
-		D("unregistering non-registered fd %d", ska->fd);
+		panic("unregistering non-registered fd %d", ska->fd);
 	NM_SOCK_LOCK(sk);
 	RESTORE_DATA_READY(sk, ska);
 	RESTORE_DESTRUCTOR(sk, ska);
