@@ -61,7 +61,8 @@
 static int stackmap_no_runtocomp = 0;
 
 int stackmap_verbose = 0;
-static int stackmap_extra = 32;
+EXPORT_SYMBOL(stackmap_verbose);
+static int stackmap_extra = 8;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_no_runtocomp, CTLFLAG_RW, &stackmap_no_runtocomp, 0 , "");
