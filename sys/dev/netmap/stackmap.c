@@ -325,16 +325,14 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			continue;
 		}
 		scb = STACKMAP_CB_NMB(nmb, bufsiz);
+		scbw(scb, kring, slot);
 		if (host) {
 			slot->fd = STACKMAP_FD_HOST;
-			scbw(scb, kring, slot);
 			stackmap_cb_set_state(scb, SCB_M_NOREF);
 			stackmap_add_fdtable(scb, kring);
 			SDPKT(SD_HOST, 0, nmb + na->virt_hdr_len);
 			continue;
 		}
-		stackmap_cb_invalidate(scb);
-		scbw(scb, kring, slot);
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
 			     nm_os_stackmap_send(kring, slot);
 		if (unlikely(error)) {
@@ -409,8 +407,6 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 				nonfree[nonfree_num++] = j;
 				scbw(scb, rxkring, rs);
-			} else if (stackmap_cb_get_state(scb) == SCB_M_NOREF) {
-				stackmap_cb_invalidate(scb);
 			}
 			tmp = *rs;
 			*rs = *ts;
@@ -457,7 +453,8 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		}
 	}
 
-	if (ft->npkts) { // we have leftover, cannot report k
+	/* try to reclaim buffers on txring */
+	if (k != rhead) { // we have leftover, cannot report k
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
 			struct netmap_slot *slot = &kring->ring->slot[j];
 			struct stackmap_cb *scb;
