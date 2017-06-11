@@ -283,11 +283,12 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	u_int dring;
 	struct netmap_kring *rxkring;
 	bool rx = 0, host = stackmap_is_host(na);
-	int leftover;
+	int leftover, fd;
 	u_int nonfree_num = 0;
-	uint32_t *nonfree;
+	uint32_t *nonfree, next, sent = 0;
 	const int rhead = kring->rhead;
 	const int bufsiz = NETMAP_BUF_SIZE(na);
+	struct stackmap_bdg_q *bq;
 
 	ft = stackmap_get_bdg_fwd(kring);
 	leftover = ft->npkts;
@@ -388,10 +389,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		howmany = ft->npkts;
 	}
 
-	for (n = 0; n < ft->nfds; n++) {
-		struct stackmap_bdg_q *bq;
-		uint32_t fd, next, sent = 0;
-
+	for (n = 0; n < ft->nfds && howmany;) {
 		fd = ft->fds[n];
 		bq = ft->fde + fd;
 		next = bq->bq_head;
@@ -417,23 +415,14 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			rs->flags |= NS_BUF_CHANGED;
 			j = nm_next(j, lim_rx);
 			sent++;
-		} while (--howmany && next != STACKMAP_FT_NULL);
-
-		/* suspend processing */
-		bq->bq_head = next; // no NULL if howmany has run out
-		if (next == STACKMAP_FT_NULL) { // this fd is done
+		} while (next != STACKMAP_FT_NULL && --howmany);
+		if (next == STACKMAP_FT_NULL)
 			n++;
-			bq = ft->fde + ft->fds[n];
-		}
-		if (n < ft->nfds) { // we haven't done
-			if (next != STACKMAP_FT_NULL)
-				bq->bq_head = next;
-			memmove(ft->fds, ft->fds + n,
-				sizeof(ft->fds[0]) * (ft->nfds - n));
-		}
-		ft->nfds -= n;
-		ft->npkts -= sent;
+		bq->bq_head = next; // no NULL if howmany has run out
 	}
+	ft->nfds -= n;
+	ft->npkts -= sent;
+	memmove(ft->fds, ft->fds + n, sizeof(ft->fds[0]) * ft->nfds);
 
 	rxkring->nr_hwtail = j;
 	mtx_unlock(&rxkring->q_lock);
