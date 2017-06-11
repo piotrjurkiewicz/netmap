@@ -934,7 +934,7 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		return 0; // drop and skip
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	skb_put(m, scb_kring(STACKMAP_CB(m))->na->virt_hdr_len);
+	skb_put(m, na->virt_hdr_len);
 	SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 
@@ -945,20 +945,17 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	 * in __netif_receive_skb_core().
 	 */
 	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
-		/* mbuf alive (our destructor hasn't invoked) */
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (!kring->extra)
+		if (unlikely(!kring->extra))
 			panic("no extra");
-		if (stackmap_extra_enqueue(scb_kring(scb), scb_slot(scb))) {
+		if (stackmap_extra_enqueue(kring, slot)) {
 			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
-				NMB(scb_kring(scb)->na, scb_slot(scb)),
-				scb_slot(scb), scb);
+				NMB(kring->na, slot), slot, scb);
 			ret = -EBUSY;
 		}
-		SD(SD_QUE, 0, "enqueued nmb %p scb %p",
-				NMB(scb_kring(scb)->na, scb_slot(scb)), scb);
+		SD(SD_QUE, 0, "enqueued nmb %p scb %p", NMB(na, slot), scb);
 	}
 	m_freem(m);
 	return ret;
@@ -1001,7 +998,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 			panic("x");
 		}
 		SD(SD_TX, 0, "error %d in sendpage() slot %ld",
-				err, slot - scb_kring(scb)->ring->slot);
+				err, slot - kring->ring->slot);
 		stackmap_cb_invalidate(scb);
 		return -EAGAIN;
 	}

@@ -62,7 +62,7 @@ static int stackmap_no_runtocomp = 0;
 
 int stackmap_verbose = 0;
 EXPORT_SYMBOL(stackmap_verbose);
-static int stackmap_extra = 8;
+static int stackmap_extra = 4;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_no_runtocomp, CTLFLAG_RW, &stackmap_no_runtocomp, 0 , "");
@@ -157,7 +157,7 @@ stackmap_extra_enqueue(struct netmap_kring *kring, struct netmap_slot *slot)
 		xcb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
 		/* XXX do we need to validate the last condition ? */
 		if (stackmap_cb_valid(xcb) &&
-		    stackmap_cb_get_state(xcb) != SCB_M_NOREF && extra->len) {
+		    stackmap_cb_get_state(xcb) != SCB_M_NOREF) {
 			continue;
 		}
 
@@ -406,8 +406,8 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			rs = &rxkring->ring->slot[j];
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 				nonfree[nonfree_num++] = j;
-				scbw(scb, rxkring, rs);
 			}
+			scbw(scb, rxkring, rs);
 			tmp = *rs;
 			*rs = *ts;
 			*ts = tmp;
@@ -445,7 +445,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
-		if (stackmap_extra_enqueue(kring, slot)) {
+		if (stackmap_extra_enqueue(rxkring, slot)) {
 			/* Don't reclaim on/after this postion */
 			u_int me = slot - rxkring->ring->slot;
 			rxkring->nkr_hwlease = me;
@@ -530,6 +530,9 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	}
 	done = stackmap_bdg_flush(kring, 0);
 	SD(SD_TX, 0, "hwcur from %u to %u (head %u)",
+			kring->nr_hwcur, done, head);
+	if (nm_is_bwrap(na))
+	SD(SD_RX, 0, "hwcur from %u to %u (head %u)",
 			kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
