@@ -508,7 +508,7 @@ stackmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct netmap_slot *slot;
 	int mismatch;
 
-	SDPKT(SD_TX, 0, m->data);
+	//SDPKT(SD_TX, 0, m->data);
 
 	/* txsync-ing TX packets are always frags */
 	if (!MBUF_NONLINEAR(m)) {
@@ -567,7 +567,7 @@ csum_transmit:
 		MBUF_LINEARIZE(m);
 		goto csum_transmit;
 	}
-	SD(SD_TX, 0, "direct scb %p", scb);
+	SD(SD_TX, 1, "direct scb %p", scb);
 
 	/* bring protocol headers in */
 	mismatch = MBUF_HEADLEN(m) - (int)slot->offset;
@@ -938,6 +938,8 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	if (m) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 
+		ND("m %p scb %p state %x destruct set %d data_destruct set %d refcnt %d", m, scb, stackmap_cb_get_state(scb), m->destructor == nm_os_stackmap_mbuf_destructor,
+			scb->ui.ubuf.callback == nm_os_stackmap_mbuf_data_destructor, atomic_read(&m->users));
 		if (stackmap_cb_valid(scb)) {
 			nm_os_stackmap_data_ready(sk);
 			kring = scb_kring(scb); // XXX assume same across the q
