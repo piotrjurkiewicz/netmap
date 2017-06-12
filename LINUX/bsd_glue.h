@@ -517,7 +517,7 @@ void netmap_bns_unregister(void);
 #define NM_SOCK_UNLOCK(_s)	release_sock(_s)
 
 /* STACKMAP_CB() is only valid for mbuf populated by nm_os_build_mbuf() */
-#define STACKMAP_CB_TAIL
+//#define STACKMAP_CB_TAIL
 #ifdef STACKMAP_CB_TAIL
 #define STACKMAP_CB(_m) ((struct stackmap_cb *) \
 		       (((void *)skb_shinfo((_m))) + \
