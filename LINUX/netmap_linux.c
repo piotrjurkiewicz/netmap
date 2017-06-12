@@ -846,7 +846,7 @@ nm_os_stackmap_restore_data_ready(NM_SOCK_T *sk,
 {
 	sk->sk_data_ready = ska->save_sk_data_ready;
 }
-
+#define MBUF_BUMPUP
 void
 nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 {
@@ -876,10 +876,10 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		stackmap_add_fdtable(scb, kring);
 		/* see comment in stackmap_transmit() */
 		stackmap_cb_set_state(scb, SCB_M_TXREF);
-		/*
+#ifdef MBUF_BUMPUP
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
-				*/
+#endif
 		sk_eat_skb(sk, m);
 		//D("ate %p state %x", m, stackmap_cb_get_state(scb));
 		count++;
@@ -940,14 +940,16 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	if (!m)
 		return 0; // drop and skip
 
-	/* have orphan() set data_destructor */
-	SET_MBUF_DESTRUCTOR(m, nm_os_stackmap_mbuf_destructor);
 	stackmap_cb_set_state(scb, SCB_M_STACK);
 	skb_put(m, na->virt_hdr_len);
 	SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
-
+#ifdef MBUF_BUMPUP
 	atomic_add(1, &m->users);
+#else
+	/* have orphan() set data_destructor */
+	SET_MBUF_DESTRUCTOR(m, nm_os_stackmap_mbuf_destructor);
+#endif
 	//D("m %p scb %p", m, scb);
 	netif_receive_skb(m);
 
@@ -955,13 +957,13 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	 * in __netif_receive_skb_core().
 	 */
 	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
-		/*
+#ifdef MBUF_BUMPUP
 		nm_set_mbuf_data_destructor(m, &scb->ui,
 				nm_os_stackmap_mbuf_data_destructor);
 		m_freem(m);
+#endif
 		if (likely(stackmap_cb_get_state(scb) == SCB_M_NOREF))
 			return ret;
-		*/
 		/* XXX Ugly */
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (unlikely(!kring->extra))
@@ -973,13 +975,13 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		}
 		SD(SD_QUE, 0, "enqueued nmb %p scb %p", NMB(na, slot), scb);
 	}
-	/*
+#ifdef MBUF_BUMPUP
        	else
 		m_freem(m);
-		*/
-	m_freem(m);
+#endif
 	return ret;
 }
+#undef MBUF_BUMPUP
 
 int
 nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
