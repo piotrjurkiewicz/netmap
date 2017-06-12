@@ -2395,7 +2395,6 @@ netmap_bwrap_intr_notify(struct netmap_kring *kring, int flags)
 
 	/* make sure the ring is not disabled */
 	if (nm_kr_tryget(kring, 0 /* can't sleep */, NULL)) {
-		D("failed to lock kring");
 		return EIO;
 	}
 

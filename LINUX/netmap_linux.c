@@ -865,7 +865,6 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headroom(m) + skb_headlen(m);
 		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
-		//D("slot %p hr %u vhl %u", slot, skb_headroom(m), kring->na->virt_hdr_len);
 		stackmap_add_fdtable(scb, kring);
 		/* see comment in stackmap_transmit() */
 		stackmap_cb_set_state(scb, SCB_M_TXREF);
@@ -873,9 +872,6 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 				nm_os_stackmap_mbuf_data_destructor);
 		sk_eat_skb(sk, m);
 		count++;
-	}
-	if (count > 1) {
-		SD(SD_RX, 0, "eaten %u packets", count);
 	}
 	spin_unlock_irqrestore(&queue->lock, cpu_flags);
 }

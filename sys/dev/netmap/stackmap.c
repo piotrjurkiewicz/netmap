@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2015 NetApp. Inc.
+ * Copyright (C) 2017 NetApp. Inc.
+ * Copyright (C) 2017 NEC Europe Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,7 +63,7 @@ static int stackmap_no_runtocomp = 0;
 
 int stackmap_verbose = 0;
 EXPORT_SYMBOL(stackmap_verbose);
-static int stackmap_extra = 4;
+static int stackmap_extra = 256;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_no_runtocomp, CTLFLAG_RW, &stackmap_no_runtocomp, 0 , "");
@@ -245,28 +246,11 @@ stackmap_ska_from_fd(struct netmap_adapter *na, int fd)
 static inline uint32_t
 stackmap_kr_rxspace(struct netmap_kring *k)
 {
-	int space;
 	int busy = k->nr_hwtail - k->nkr_hwlease;
 
 	if (busy < 0)
 		busy += k->nkr_num_slots;
-	space = k->nkr_num_slots - 1 - busy;
-	if (space < 0)
-		panic("negative space");
-	return space;
-}
-
-static void
-stackmap_clear_bufs(struct netmap_kring *kring, u_int from, u_int to)
-{
-	u_int lim = kring->nkr_num_slots - 1;
-	u_int bufsiz = NETMAP_BUF_SIZE(kring->na), cur;
-
-	for (cur = from; cur != to; cur = nm_next(cur, lim)) {
-		struct netmap_slot *slot = &kring->ring->slot[cur];
-
-		bzero(NMB(kring->na, slot), 16);
-	}
+	return k->nkr_num_slots - 1 - busy;
 }
 
 static int
@@ -346,11 +330,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	}
 	kring->nkr_hwlease = k; // next position to throw into the stack
 
-	/* Now, we know how many packets go to the receiver
-	 * On TX we can drop packets with handling packets with 
-	 * references appropriately.
-	 * On RX we cannot do so.
-	 */
+	/* Now, we know how many packets go to the receiver */
 
 	if (unlikely(!nm_netmap_on(rxna))) {
 		panic("receiver na off");
@@ -368,9 +348,8 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		mtx_unlock(&rxkring->q_lock);
 		goto unlock_out;
 	}
-	howmany = stackmap_kr_rxspace(rxkring); // we don't use lease
-	if (howmany < ft->npkts) {
-		/* Reclaim completed buffers */
+	howmany = stackmap_kr_rxspace(rxkring);
+	if (howmany < ft->npkts) { // try to reclaim completed buffers
 		u_int i;
 
 		for (i = rxkring->nkr_hwlease, n = 0; i != rxkring->nr_hwtail;
@@ -430,7 +409,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	rxkring->nm_notify(rxkring, 0);
 	rxkring->nkr_hwlease = rxkring->nr_hwcur;
 
-	/* nm_notify processed all the packets, now swap out ones with refs */
+	/* swap out packets still referred by the stack */
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
@@ -442,8 +421,8 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		}
 	}
 
-	/* try to reclaim buffers on txring */
 	if (k != rhead) { // we have leftover, cannot report k
+		/* try to reclaim buffers on txring */
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
 			struct netmap_slot *slot = &kring->ring->slot[j];
 			struct stackmap_cb *scb;
@@ -463,8 +442,6 @@ unlock_out:
 		local_bh_enable();
 	if (!locked)
 		netmap_bdg_runlock(vpna->na_bdg);
-	/* clear a range from hwcur to k which is swapped out or consumed */
-	//stackmap_clear_bufs(kring, kring->nr_hwcur, nm_next(k, lim_tx));
 	return k;
 }
 
@@ -518,11 +495,6 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		return 0;
 	}
 	done = stackmap_bdg_flush(kring, 0);
-	SD(SD_TX, 0, "hwcur from %u to %u (head %u)",
-			kring->nr_hwcur, done, head);
-	if (nm_is_bwrap(na))
-	SD(SD_RX, 0, "hwcur from %u to %u (head %u)",
-			kring->nr_hwcur, done, head);
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
 	return 0;
@@ -538,7 +510,7 @@ stackmap_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	SDPKT(SD_TX, 0, m->data);
 
-	/* txsync-ing packets are always frags */
+	/* txsync-ing TX packets are always frags */
 	if (!MBUF_NONLINEAR(m)) {
 csum_transmit:
 	       	if (nm_os_mbuf_has_offld(m)) {
@@ -546,7 +518,7 @@ csum_transmit:
 			char *th;
 			uint16_t *check;
 
-			iph = MBUF_NETWORK_HEADER(m);
+			iph = (struct nm_iphdr *)MBUF_NETWORK_HEADER(m);
 			KASSERT(ntohs(iph->tot_len) >= 46,
 			    ("too small UDP packet %d", ntohs(iph->tot_len)));
 			th = MBUF_TRANSPORT_HEADER(m);
@@ -561,24 +533,18 @@ csum_transmit:
 			 * see HWCSUM/IP6CSUM in dev and ip_sum PARTIAL on m.
 			 */
 			*check = 0;
-			nm_os_csum_tcpudp_ipv4(iph, th, skb_tail_pointer(m)
-					- skb_transport_header(m), check);
+			nm_os_csum_tcpudp_ipv4(iph, th, MBUF_TAIL_POINTER(m)
+					- MBUF_TRANSPORT_HEADER(m), check);
 			m->ip_summed = 0;
 		}
-		SDPKT(SD_QUE, 0, m->data);
 		netmap_transmit(ifp, m);
 		return 0;
 	}
 
-	/* Possibly from sendpage() context */
-	if (skb_shinfo(m)->nr_frags > 1) {
-		SD(SD_QUE, 0, "nr_frags %d", skb_shinfo(m)->nr_frags);
-		SDPKT(SD_QUE, 0, m->data);
-	}
 	scb = STACKMAP_CB_EXT(m, 0, NETMAP_BUF_SIZE(na));
 	if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
 		SD(SD_TX, 0, "nonlinear nonsendpage scb %p", scb);
-		skb_linearize(m); // XXX
+		MBUF_LINEARIZE(m); // XXX
 		goto csum_transmit;
 	}
 
@@ -589,7 +555,7 @@ csum_transmit:
 		 * or txring slot. The backend might drop this packet.
 		 */
 		struct stackmap_cb *scb2;
-		int i, n = skb_shinfo(m)->nr_frags;
+		int i, n = MBUF_CLUSTERS(m);
 
 		for (i = 0; i < n; i++) {
 			scb2 = STACKMAP_CB_EXT(m, i, NETMAP_BUF_SIZE(na));
@@ -808,7 +774,7 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 
 		KASSERT(na->nm_mem == slave->nm_mem, "slave has different mem");
 
-		/* For the first slave now it is the first time to have ifp
+		/* For the first slave it is the first time to have ifp
 		 * We must set buffer offset before finalizing at nm_bdg_ctl()
 		 * callback. As we see, we adopt the value for the first NIC */
 		slave->virt_hdr_len = hwna->virt_hdr_len = na->virt_hdr_len;
