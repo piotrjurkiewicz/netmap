@@ -698,6 +698,60 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 	return 0;
 }
 
+/* Create extra buffers and mbuf pool */
+int
+stackmap_bwrap_reg(struct netmap_adapter *na, int onoff)
+{
+	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_hw_adapter *hw = (struct netmap_hw_adapter *)hwna;
+	int error;
+
+	error = netmap_bwrap_reg(na, onoff);
+	if (error)
+		return error;
+
+	if (onoff) {
+		if (stackmap_extra_alloc(na)) {
+			D("extra_alloc failed for slave");
+			netmap_bwrap_reg(na, 0);
+			return ENOMEM;
+		}
+
+		/* na->if_transmit already has backup */
+#ifdef linux
+		hw->nm_ndo.ndo_start_xmit = linux_stackmap_start_xmit;
+		/* re-overwrite */
+		hwna->ifp->netdev_ops = &hw->nm_ndo;
+#else // not supported yet
+#endif /* linux */
+	} else {
+		/* restore default start_xmit for future register */
+		((struct netmap_hw_adapter *)hwna)->nm_ndo.ndo_start_xmit =
+			linux_netmap_start_xmit;
+	}
+	return error;
+}
+
+static int
+stackmap_bwrap_attach(struct netmap_adapter *na)
+{
+	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter *)na;
+	struct netmap_adapter *hwna = bna->hwna;
+	struct netmap_adapter *hostna = &bna->host.up;
+
+	hwna->virt_hdr_len = na->virt_hdr_len;
+	if (hwna->na_flags & NAF_HOST_RINGS)
+		bna->host.up.virt_hdr_len = na->virt_hdr_len;
+	na->nm_register = stackmap_bwrap_reg;
+	na->nm_txsync = stackmap_txsync;
+	hostna->nm_intr_notify = netmap_bwrap_intr_notify;
+	if (!stackmap_no_runtocomp)
+		na->nm_intr_notify = stackmap_intr_notify;
+	return 0;
+}
+
+
 /* XXX Ugly to separate from reg_slaves(), but we cannot detach
  * slaves by name as get_bnsbridges() fails due to lack of current.
  */
@@ -718,9 +772,6 @@ stackmap_unreg_slaves(struct netmap_adapter *na) {
 		lut = hwna->na_lut.lut;
 		netmap_adapter_get(slave);
 		slave->nm_bdg_ctl(slave, NULL, 0);
-		/* restore default start_xmit for future register */
-		((struct netmap_hw_adapter *)
-		    hwna)->nm_ndo.ndo_start_xmit = linux_netmap_start_xmit;
 		netmap_adapter_put(slave);
 	}
 }
@@ -733,7 +784,6 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 	int error = 0;
 	struct nmreq nmr;
 	char *p = nmr.nr_name;
-	struct nm_bridge *b = sna->up.na_bdg;
 
 	bzero(&nmr, sizeof(nmr));
 	nmr.nr_version = NETMAP_API;
@@ -752,11 +802,6 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 	while ((tok = strsep(&s, "+")) != NULL &&
 	    strncmp(tok, p, strlen(tok))) {
 		struct netmap_adapter *slave = NULL;
-		struct netmap_bwrap_adapter *bna;
-		struct netmap_adapter *hwna;
-		struct netmap_hw_adapter *h;
-		struct netmap_adapter *vpna;
-		int i;
 
 		strlcpy(p, tok, strlen(tok) + 1);
 		error = netmap_get_bdg_na(&nmr, &slave, na->nm_mem, 1);
@@ -768,68 +813,15 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 			continue;
 		}
 
-		bna = (struct netmap_bwrap_adapter *)slave;
-		vpna = &bna->up.up;
-		hwna = bna->hwna;
+		/* install reg/intr_notify/txsync callbacks */
+		slave->virt_hdr_len = na->virt_hdr_len;
+		stackmap_bwrap_attach(slave);
 
-		KASSERT(na->nm_mem == slave->nm_mem, "slave has different mem");
-
-		/* For the first slave it is the first time to have ifp
-		 * We must set buffer offset before finalizing at nm_bdg_ctl()
-		 * callback. As we see, we adopt the value for the first NIC */
-		slave->virt_hdr_len = hwna->virt_hdr_len = na->virt_hdr_len;
-		if (hwna->na_flags & NAF_HOST_RINGS)
-			bna->host.up.virt_hdr_len = slave->virt_hdr_len;
 		error = slave->nm_bdg_ctl(slave, &nmr, 1);
 		if (error) {
 			netmap_adapter_put(slave);
 			continue;
 		}
-		/* XXX We clearly need to simplify lock */
-		netmap_bdg_wlock(b);
-		if (stackmap_extra_alloc(slave)) {
-			D("extra_alloc failed for slave");
-			netmap_bdg_wunlock(b);
-			nmr.nr_cmd = NETMAP_BDG_DETACH;
-			slave->nm_bdg_ctl(slave, &nmr, 0);
-			netmap_adapter_put(slave);
-			continue;
-		}
-
-		/* we don't have keep original intr_notify() as
-		 * we do this after original reg callback
-		 */
-		if (!stackmap_no_runtocomp) {
-			for (i = 0; i < hwna->num_rx_rings; i++) {
-				hwna->rx_rings[i].nm_notify = 
-					stackmap_intr_notify;
-			}
-			/*
-			for (i = 0; i < hwna->num_tx_rings; i++) {
-				hwna->tx_rings[i].nm_notify =
-					stackmap_intr_notify;
-			}
-			*/
-		}
-		for (i = 0; i < vpna->num_tx_rings; i++)
-			vpna->tx_rings[i].nm_sync = stackmap_txsync;
-		/* packets originated by the host stack
-		 * simply go into the bridge
-		 */
-		if (bna->host.na_bdg) {
-			vpna->tx_rings[i].nm_sync = stackmap_txsync;
-		}
-
-		/* na->if_transmit already has backup */
-		h = (struct netmap_hw_adapter *)hwna;
-#ifdef linux
-		h->nm_ndo.ndo_start_xmit =
-			linux_stackmap_start_xmit;
-		/* re-overwrite */
-		hwna->ifp->netdev_ops = &h->nm_ndo;
-#else // not supported yet
-#endif /* linux */
-		netmap_bdg_wunlock(b);
 	}
 	nm_os_free(s_orig);
 	return error;

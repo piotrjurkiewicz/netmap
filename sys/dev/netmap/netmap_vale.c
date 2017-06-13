@@ -2521,14 +2521,15 @@ netmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 		/* intercept the hwna nm_nofify callback on the hw rings */
 		for (i = 0; i < hwna->num_rx_rings; i++) {
 			hwna->rx_rings[i].save_notify = hwna->rx_rings[i].nm_notify;
-			hwna->rx_rings[i].nm_notify = netmap_bwrap_intr_notify;
+			hwna->rx_rings[i].nm_notify = na->nm_intr_notify;
 		}
 		i = hwna->num_rx_rings; /* for safety */
 		/* save the host ring notify unconditionally */
 		hwna->rx_rings[i].save_notify = hwna->rx_rings[i].nm_notify;
 		if (hostna->na_bdg) {
 			/* also intercept the host ring notify */
-			hwna->rx_rings[i].nm_notify = netmap_bwrap_intr_notify;
+			hwna->rx_rings[i].nm_notify = hostna->up.nm_intr_notify;
+			na->tx_rings[i].nm_sync = na->nm_txsync;
 		}
 		if (na->active_fds == 0)
 			na->na_flags |= NAF_NETMAP_ON;
@@ -2769,6 +2770,7 @@ netmap_bwrap_attach(const char *nr_name, struct netmap_adapter *hwna)
 	na->nm_krings_create = netmap_bwrap_krings_create;
 	na->nm_krings_delete = netmap_bwrap_krings_delete;
 	na->nm_notify = netmap_bwrap_notify;
+	na->nm_intr_notify = netmap_bwrap_intr_notify;
 	na->nm_bdg_ctl = netmap_bwrap_bdg_ctl;
 	na->pdev = hwna->pdev;
 	na->nm_mem = netmap_mem_get(hwna->nm_mem);
@@ -2795,6 +2797,7 @@ netmap_bwrap_attach(const char *nr_name, struct netmap_adapter *hwna)
 		// hostna->nm_txsync = netmap_bwrap_host_txsync;
 		// hostna->nm_rxsync = netmap_bwrap_host_rxsync;
 		hostna->nm_notify = netmap_bwrap_notify;
+		hostna->nm_intr_notify = netmap_bwrap_intr_notify;
 		hostna->nm_mem = netmap_mem_get(na->nm_mem);
 		hostna->na_private = bna;
 		hostna->na_vp = &bna->up;

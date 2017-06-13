@@ -114,16 +114,18 @@ struct nm_bdg_q {
 int netmap_bwrap_intr_notify(struct netmap_kring *kring, int flags);
 int netmap_vp_rxsync(struct netmap_kring *kring, int flags);
 int netmap_bwrap_reg(struct netmap_adapter *, int onoff);
+#ifdef WITH_STACK
+int stackmap_bwrap_reg(struct netmap_adapter *, int onoff);
+#endif /* WITH_STACK */
 
 static inline int
 nm_is_bwrap(struct netmap_adapter *na)
 {
+	return
 #ifdef WITH_STACK
-	if (na->nm_register == stackmap_reg)
-		return (((struct stackmap_adapter *)na)->save_reg ==
-				netmap_bwrap_reg);
+	(na->nm_register == stackmap_bwrap_reg) ||
 #endif /* WITH_STACK */
-	return na->nm_register == netmap_bwrap_reg;
+	(na->nm_register == netmap_bwrap_reg);
 }
 
 
