@@ -699,6 +699,56 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 }
 
 /* Create extra buffers and mbuf pool */
+
+#define for_each_kring_n(_i, _k, _karr, _n) \
+	for (_k=_karr, _i = 0; _i < _n; (_k)++, (_i)++)
+#define for_each_tx_kring(_i, _k, _na) \
+	for_each_kring_n(_i, _k, (_na)->tx_rings, (_na)->num_tx_rings)
+
+static int
+stackmap_mbufpool_alloc(struct netmap_adapter *na)
+{
+	struct netmap_kring *kring;
+	int r, error = 0;
+
+	for_each_tx_kring(r, kring, na) {
+		kring->tx_pool = NULL;
+	}
+	for_each_tx_kring(r, kring, na) {
+		kring->tx_pool =
+			nm_os_malloc(na->num_tx_desc *
+				sizeof(struct mbuf *));
+		if (!kring->tx_pool) {
+			D("tx_pool allocation failed");
+			error = ENOMEM;
+			break;
+		}
+	}
+	if (error) {
+		for_each_tx_kring(r, kring, na) {
+			if (kring->tx_pool == NULL)
+				continue;
+			nm_os_free(kring->tx_pool);
+			kring->tx_pool = NULL;
+		}
+	}
+	return error;
+}
+
+static void
+stackmap_mbufpool_free(struct netmap_adapter *na)
+{
+	struct netmap_kring *kring;
+	int r;
+
+	for_each_tx_kring(r, kring, na) {
+		if (kring->tx_pool == NULL)
+			continue;
+		nm_os_free(kring->tx_pool);
+		kring->tx_pool = NULL;
+	}
+}
+
 int
 stackmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 {
@@ -714,6 +764,12 @@ stackmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 	if (onoff) {
 		if (stackmap_extra_alloc(na)) {
 			D("extra_alloc failed for slave");
+			netmap_bwrap_reg(na, 0);
+			return ENOMEM;
+		}
+		if (stackmap_mbufpool_alloc(na)) {
+			D("mbufpool_alloc failed for slave");
+			stackmap_extra_free(na);
 			netmap_bwrap_reg(na, 0);
 			return ENOMEM;
 		}
