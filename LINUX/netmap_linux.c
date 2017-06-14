@@ -846,7 +846,8 @@ nm_os_stackmap_restore_data_ready(NM_SOCK_T *sk,
 {
 	sk->sk_data_ready = ska->save_sk_data_ready;
 }
-#define MBUF_BUMPUP
+
+extern int stackmap_no_runtocomp;
 void
 nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 {
@@ -857,7 +858,8 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	struct netmap_kring *kring = NULL;
 
 	/* OOO segment(s) might have been enqueued in the same rxsync round */
-	spin_lock_irqsave(&queue->lock, cpu_flags);
+	if (stackmap_no_runtocomp)
+		spin_lock_irqsave(&queue->lock, cpu_flags);
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 		struct netmap_slot *slot;
@@ -876,15 +878,12 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		stackmap_add_fdtable(scb, kring);
 		/* see comment in stackmap_transmit() */
 		stackmap_cb_set_state(scb, SCB_M_TXREF);
-#ifdef MBUF_BUMPUP
-		nm_set_mbuf_data_destructor(m, &scb->ui,
-				nm_os_stackmap_mbuf_data_destructor);
-#endif
 		sk_eat_skb(sk, m);
 		//D("ate %p state %x", m, stackmap_cb_get_state(scb));
 		count++;
 	}
-	spin_unlock_irqrestore(&queue->lock, cpu_flags);
+	if (stackmap_no_runtocomp)
+		spin_unlock_irqrestore(&queue->lock, cpu_flags);
 }
 
 NM_SOCK_T *
@@ -922,7 +921,9 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	get_page(page); // survive __kfree_skb()
 	m->dev = na->ifp;
 	skb_reserve(m, na->virt_hdr_len); // m->data and tail
-	skb_put(m, len - na->virt_hdr_len); // advance m->tail and m->len
+	/* Note. the NIC has set slot->len without virt_hdr_len */
+	skb_put(m, len); // advance m->tail and m->len
+	__builtin_prefetch(m->data);
 	return m;
 }
 
@@ -941,33 +942,21 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		return 0; // drop and skip
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	skb_put(m, na->virt_hdr_len);
-	SDPKT(SD_RX, 0, m->data);
+	//skb_put(m, na->virt_hdr_len);
+	//SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
-#ifdef MBUF_BUMPUP
-	atomic_add(1, &m->users);
-#else
 	/* have orphan() set data_destructor */
 	SET_MBUF_DESTRUCTOR(m, nm_os_stackmap_mbuf_destructor);
-#endif
 	//D("m %p scb %p", m, scb);
 	netif_receive_skb(m);
+	ND("m %p state %d mlen %d slot->len %d", m, stackmap_cb_get_state(scb),
+			m->len, slot->len);
 
 	/* setting data destructor is safe only after skb_orphan_frag()
 	 * in __netif_receive_skb_core().
 	 */
 	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
-#ifdef MBUF_BUMPUP
-		nm_set_mbuf_data_destructor(m, &scb->ui,
-				nm_os_stackmap_mbuf_data_destructor);
-		m_freem(m);
-#endif
-		if (likely(stackmap_cb_get_state(scb) == SCB_M_NOREF))
-			return ret;
-		/* XXX Ugly */
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
-		if (unlikely(!kring->extra))
-			panic("no extra");
 		if (stackmap_extra_enqueue(kring, slot)) {
 			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
 				NMB(kring->na, slot), slot, scb);
@@ -975,10 +964,6 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		}
 		SD(SD_QUE, 0, "enqueued nmb %p scb %p", NMB(na, slot), scb);
 	}
-#ifdef MBUF_BUMPUP
-       	else
-		m_freem(m);
-#endif
 	return ret;
 }
 #undef MBUF_BUMPUP
@@ -1014,7 +999,7 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	err = kernel_sendpage(sk->sk_socket, page, poff, len, MSG_DONTWAIT);
 	if (unlikely(err < 0)) {
 		/* XXX check if it is enough to assume EAGAIN only */
-		if (stackmap_cb_get_state(scb) != SCB_M_STACK) {
+		if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
 			D("sendpage() error with unexpected state %d",
 					stackmap_cb_get_state(scb));
 			panic("x");

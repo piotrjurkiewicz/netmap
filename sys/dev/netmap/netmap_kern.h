@@ -2070,6 +2070,7 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 
 #ifdef WITH_STACK
 extern int stackmap_verbose;
+extern int stackmap_no_runtocomp;
 #define NM_ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
 #define NM_IPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
 #define NM_IPLEN(p)	(ntohs(NM_IPHDR(p)->tot_len))

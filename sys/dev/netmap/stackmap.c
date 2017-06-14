@@ -59,7 +59,7 @@
 #include <dev/netmap/netmap_bdg.h>
 
 #ifdef WITH_STACK
-static int stackmap_no_runtocomp = 0;
+int stackmap_no_runtocomp = 0;
 
 int stackmap_verbose = 0;
 EXPORT_SYMBOL(stackmap_verbose);
@@ -278,7 +278,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	leftover = ft->npkts;
 	nonfree = ft->tmp;
 
-	if (!locked && netmap_bdg_rlock(vpna->na_bdg, na)) {
+	if (likely(!locked) && netmap_bdg_rlock(vpna->na_bdg, na)) {
 		SD(SD_GEN, 1, "failed to obtain rlock");
 		return k;
 	}
@@ -315,7 +315,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 			slot->fd = STACKMAP_FD_HOST;
 			stackmap_cb_set_state(scb, SCB_M_NOREF);
 			stackmap_add_fdtable(scb, kring);
-			SDPKT(SD_HOST, 0, nmb + na->virt_hdr_len);
+			//SDPKT(SD_HOST, 0, nmb + na->virt_hdr_len);
 			continue;
 		}
 		error = rx ? nm_os_stackmap_recv(kring, slot) :
@@ -413,10 +413,10 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	for (j = 0; j < nonfree_num; j++) {
 		struct netmap_slot *slot = &rxkring->ring->slot[nonfree[j]];
 
-		if (stackmap_extra_enqueue(rxkring, slot)) {
+		if (unlikely(stackmap_extra_enqueue(rxkring, slot))) {
 			/* Don't reclaim on/after this postion */
-			u_int me = slot - rxkring->ring->slot;
-			rxkring->nkr_hwlease = me;
+			u_long nm_i = slot - rxkring->ring->slot;
+			rxkring->nkr_hwlease = nm_i;
 			break;
 		}
 	}
@@ -440,7 +440,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 unlock_out:
 	if (rx)
 		local_bh_enable();
-	if (!locked)
+	if (likely(!locked))
 		netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
