@@ -826,6 +826,9 @@ nm_os_stackmap_mbuf_data_destructor(struct ubuf_info *uarg,
 	}
 	//D("called scb %p", scb);
 	stackmap_cb_set_state(scb, SCB_M_NOREF);
+#ifndef STACKMAP_LINEAR
+	stackmap_extra_dequeue(scb_kring(scb), scb_slot(scb));
+#endif
 }
 
 void

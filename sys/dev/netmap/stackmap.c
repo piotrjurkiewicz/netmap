@@ -142,17 +142,33 @@ struct stackmap_bdgfwd {
 };
 #define STACKMAP_FT_NULL 0	// invalid buf index
 
-/* TODO: avoid linear search... */
+struct stackmap_extra_slot {
+	struct netmap_slot slot;
+	uint16_t prev;
+	uint16_t next;
+};
+
+struct extra_pool {
+	u_int num;
+	uint32_t *bufs;
+	struct stackmap_extra_slot *slots;
+	uint32_t free;
+	uint32_t free_tail;
+	uint32_t busy;
+	uint32_t busy_tail;
+};
+#define NM_EXT_NULL	((uint16_t)~0)
+#ifdef STACKMAP_LINEAR
 int
 stackmap_extra_enqueue(struct netmap_kring *kring, struct netmap_slot *slot)
 {
 	struct netmap_adapter *na = kring->na;
-	struct netmap_slot *slots = kring->extra->slots;
+	struct stackmap_extra_slot *slots = kring->extra->slots;
 	int i, n = kring->extra->num;
 
 	for (i = 0; i < n; i++) {
-		struct netmap_slot *extra = &slots[i];
-		struct netmap_slot tmp;
+		struct stackmap_extra_slot *es = &slots[i];
+		struct netmap_slot tmp, *extra = &es->slot;
 		struct stackmap_cb *xcb, *scb;
 
 		xcb = STACKMAP_CB_NMB(NMB(na, extra), NETMAP_BUF_SIZE(na));
@@ -183,6 +199,92 @@ stackmap_extra_enqueue(struct netmap_kring *kring, struct netmap_slot *slot)
 	}
 	return EBUSY;
 }
+#else /* !STACKMAP_LINEAR */
+void
+stackmap_extra_dequeue(struct netmap_kring *kring, struct netmap_slot *slot)
+{
+	struct netmap_ring *ring = kring->ring;
+	struct extra_pool *pool = kring->extra;
+	struct stackmap_extra_slot *slots = pool->slots, *extra;
+	u_int pos;
+
+	/* nothing to do if I am on the ring */
+	if ((uintptr_t)slot >= (uintptr_t)ring->slot &&
+	    (uintptr_t)slot < (uintptr_t)(ring->slot + kring->nkr_num_slots)) {
+		return;
+	}
+	if (unlikely(!((uintptr_t)slot >= (uintptr_t)slots &&
+	      (uintptr_t)slot < (uintptr_t)(slots + pool->num))))
+		panic("invalid slot");
+
+	extra = (struct stackmap_extra_slot *)slot;
+	pos = extra - slots;
+
+	/* remove from busy list (offset has been modified to indicate prev) */
+	if (extra->next == NM_EXT_NULL)
+		pool->busy_tail = extra->prev; // might be NM_EXT_NULL
+	else
+		slots[extra->next].prev = extra->prev; // might be NM_EXT_NULL
+	if (extra->prev == NM_EXT_NULL)
+		pool->busy = extra->next; // might be NM_EXT_NULL
+	else
+		slots[extra->prev].next = extra->next; // might be NM_EXT_NULL
+
+	/* append to free list */
+	extra->next = NM_EXT_NULL;
+	if (unlikely(pool->free == NM_EXT_NULL))
+		pool->free = pos;
+	else
+		slots[pool->free_tail].next = pos;
+	extra->prev = pool->free_tail; // can be NM_EXT_NULL
+	pool->free_tail = pos;
+}
+
+int
+stackmap_extra_enqueue(struct netmap_kring *kring, struct netmap_slot *slot)
+{
+	struct netmap_adapter *na = kring->na;
+	struct extra_pool *pool = kring->extra;
+	struct stackmap_extra_slot *slots = pool->slots, *extra;
+	struct netmap_slot tmp;
+	u_int pos;
+	struct stackmap_cb *scb;
+
+	if (pool->free_tail == NM_EXT_NULL)
+		return EBUSY;
+
+	pos = pool->free_tail;
+	extra = &slots[pos];
+
+	/* remove from free list */
+	pool->free_tail = extra->prev;
+	if (unlikely(pool->free_tail == NM_EXT_NULL)) // I was the last one
+		pool->free = NM_EXT_NULL;
+	else // not the last one
+		slots[extra->prev].next = NM_EXT_NULL;
+
+	/* apend to busy list */
+	extra->next = NM_EXT_NULL;
+	if (pool->busy == NM_EXT_NULL) {
+		pool->busy = pos;
+	} else
+		slots[pool->busy_tail].next = pos;
+	extra->prev = pool->busy_tail;
+	pool->busy_tail = pos;
+
+	scb = STACKMAP_CB_NMB(NMB(na, slot), NETMAP_BUF_SIZE(na));
+	tmp = extra->slot; // backup
+	extra->slot = *slot;
+	slot->buf_idx = tmp.buf_idx;
+	slot->flags |= NS_BUF_CHANGED;
+	slot->len = slot->offset = slot->next = 0;
+	slot->fd = 0;
+
+	scbw(scb, kring, &extra->slot);
+
+	return 0;
+}
+#endif /* !STACKMAP_LINEAR */
 
 static inline struct stackmap_bdgfwd *
 stackmap_get_bdg_fwd(struct netmap_kring *kring)
@@ -628,7 +730,7 @@ stackmap_extra_free(struct netmap_adapter *na)
 
 				/* Build a returning buffer list */
 				for (j = 0; j < extra->num; j++) {
-					u_int idx = extra->slots[j].buf_idx;
+					u_int idx = extra->slots[j].slot.buf_idx;
 					if (idx >= 2)
 						extra->bufs[j] = idx;
 				}
@@ -654,15 +756,15 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 		/* XXX probably we don't need extra on host rings */
 		for (i = 0; i < netmap_real_rings(na, t); i++) {
 			struct netmap_kring *kring = &NMR(na, t)[i];
-			struct extra_pool *extra;
+			struct extra_pool *pool;
 			uint32_t *extra_bufs;
-			struct netmap_slot *extra_slots = NULL;
+			struct stackmap_extra_slot *extra_slots = NULL;
 			u_int want = stackmap_extra, n, j;
 
-			extra = nm_os_malloc(sizeof(*kring->extra));
-			if (!extra)
+			pool = nm_os_malloc(sizeof(*kring->extra));
+			if (!pool)
 				break;
-			kring->extra = extra;
+			kring->extra = pool;
 
 			extra_bufs = nm_os_malloc(sizeof(*extra_bufs) *
 					(want + 1));
@@ -682,12 +784,18 @@ stackmap_extra_alloc(struct netmap_adapter *na)
 					break;
 			}
 			for (j = 0; j < n; j++) {
-				struct netmap_slot *slot = &extra_slots[j];
+				struct stackmap_extra_slot *exslot;
 
-				slot->buf_idx = extra_bufs[j];
-				slot->len = 0;
+				exslot = &extra_slots[j];
+				exslot->slot.buf_idx = extra_bufs[j];
+				exslot->slot.len = 0;
+				exslot->prev = j == 0 ? NM_EXT_NULL : j - 1;
+				exslot->next = j + 1 == n ? NM_EXT_NULL : j + 1;
 			}
-			kring->extra->slots = extra_slots;
+			pool->free = 0;
+			pool->free_tail = n - 1;
+			pool->busy = pool->busy_tail = NM_EXT_NULL;
+			pool->slots = extra_slots;
 		}
 		/* rollaback on error */
 		if (i < netmap_real_rings(na, t)) {

@@ -357,11 +357,7 @@ struct netmap_zmon_list {
 #endif /* WITH_MONITOR */
 
 #ifdef WITH_STACK
-struct extra_pool {
-	u_int num;
-	uint32_t *bufs;
-	struct netmap_slot *slots;
-};
+struct extra_pool;
 #endif /* WITH_STACK */
 
 /*
@@ -2119,6 +2115,10 @@ int nm_os_stackmap_recv(struct netmap_kring *, struct netmap_slot *);
 int nm_os_stackmap_send(struct netmap_kring *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
 int stackmap_extra_enqueue(struct netmap_kring *, struct netmap_slot *);
+//#define STACKMAP_LINEAR
+#ifndef STACKMAP_LINEAR
+void stackmap_extra_dequeue(struct netmap_kring *, struct netmap_slot *);
+#endif
 #endif /* WITH_STACK */
 
 /* Shared declarations for the VALE switch. */
