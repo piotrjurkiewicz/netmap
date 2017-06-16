@@ -909,7 +909,6 @@ stackmap_bwrap_attach(struct netmap_adapter *na)
 		bna->host.up.virt_hdr_len = na->virt_hdr_len;
 	na->nm_register = stackmap_bwrap_reg;
 	na->nm_txsync = stackmap_txsync;
-	hostna->nm_intr_notify = netmap_bwrap_intr_notify;
 	if (!stackmap_no_runtocomp)
 		na->nm_intr_notify = stackmap_intr_notify;
 	return 0;
