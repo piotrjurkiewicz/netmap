@@ -212,10 +212,13 @@ stackmap_extra_dequeue(struct netmap_kring *kring, struct netmap_slot *slot)
 	if ((uintptr_t)slot >= (uintptr_t)ring->slot &&
 	    (uintptr_t)slot < (uintptr_t)(ring->slot + kring->nkr_num_slots)) {
 		return;
-	}
-	if (unlikely(!((uintptr_t)slot >= (uintptr_t)slots &&
-	      (uintptr_t)slot < (uintptr_t)(slots + pool->num))))
+	} else if (unlikely(!pool->num)) {
+		RD(1, "extra slots have gone");
+		return;
+	} else if (unlikely(!((uintptr_t)slot >= (uintptr_t)slots &&
+	      (uintptr_t)slot < (uintptr_t)(slots + pool->num)))) {
 		panic("invalid slot");
+	}
 
 	extra = (struct stackmap_extra_slot *)slot;
 	pos = extra - slots;
@@ -893,6 +896,8 @@ stackmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 		/* restore default start_xmit for future register */
 		((struct netmap_hw_adapter *)hwna)->nm_ndo.ndo_start_xmit =
 			linux_netmap_start_xmit;
+		stackmap_mbufpool_free(na);
+		stackmap_extra_free(na);
 	}
 	return error;
 }
