@@ -61,12 +61,14 @@
 #ifdef WITH_STACK
 int stackmap_no_runtocomp = 0;
 
+int stackmap_host_batch = 1;
 int stackmap_verbose = 0;
 EXPORT_SYMBOL(stackmap_verbose);
 static int stackmap_extra = 256;
 SYSBEGIN(vars_stack);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_no_runtocomp, CTLFLAG_RW, &stackmap_no_runtocomp, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_host_batch, CTLFLAG_RW, &stackmap_host_batch, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_verbose, CTLFLAG_RW, &stackmap_verbose, 0 , "");
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_extra, CTLFLAG_RW, &stackmap_extra, 0 , "");
 SYSEND;
@@ -567,7 +569,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 			struct netmap_adapter *na = &vpna->up;
 			struct netmap_adapter *hwna;
-			struct netmap_kring *hwkring;
+			struct netmap_kring *hwkring, *hkring;
 	
 			if (netmap_bdg_idx(vpna) == netmap_bdg_idx(&sna->up))
 				continue;
@@ -581,7 +583,15 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
 			hwkring = NMR(hwna, NR_RX) +
 				(na->num_tx_rings > me ? me : 0);
+			hkring = &NMR(hwna, NR_RX)[na->num_rx_rings];
+			if (stackmap_host_batch)
+				hkring->nr_kflags |= NKR_INSYNC;
 			netmap_bwrap_intr_notify(hwkring, flags);
+			if (stackmap_host_batch) {
+				hkring->nr_kflags &= ~NKR_INSYNC;
+				/* flush packets sent by the host */
+				netmap_bwrap_intr_notify(hkring, flags);
+			}
 		}
 	}
 	return 0;
@@ -907,15 +917,15 @@ stackmap_bwrap_attach(struct netmap_adapter *na)
 {
 	struct netmap_bwrap_adapter *bna = (struct netmap_bwrap_adapter *)na;
 	struct netmap_adapter *hwna = bna->hwna;
-	struct netmap_adapter *hostna = &bna->host.up;
 
 	hwna->virt_hdr_len = na->virt_hdr_len;
 	if (hwna->na_flags & NAF_HOST_RINGS)
 		bna->host.up.virt_hdr_len = na->virt_hdr_len;
 	na->nm_register = stackmap_bwrap_reg;
 	na->nm_txsync = stackmap_txsync;
-	if (!stackmap_no_runtocomp)
+	if (!stackmap_no_runtocomp) {
 		na->nm_intr_notify = stackmap_intr_notify;
+	}
 	return 0;
 }
 

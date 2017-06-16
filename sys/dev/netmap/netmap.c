@@ -3189,7 +3189,9 @@ done:
 	if (m)
 		m_freem(m);
 	/* unconditionally wake up listeners */
-	kring->nm_notify(kring, 0);
+	if (!(kring->nr_kflags & NKR_INSYNC)) {
+		kring->nm_notify(kring, 0);
+	}
 	/* this is normally netmap_notify(), but for nics
 	 * connected to a bridge it is netmap_bwrap_intr_notify(),
 	 * that possibly forwards the frames through the switch
