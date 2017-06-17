@@ -920,13 +920,13 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	m = build_skb(buf, NETMAP_BUF_SIZE(na) - sizeof(struct stackmap_cb));
 	if (!m)
 		return NULL;
+	__builtin_prefetch(m->data);
 	page = virt_to_page(buf);
 	get_page(page); // survive __kfree_skb()
 	m->dev = na->ifp;
 	skb_reserve(m, na->virt_hdr_len); // m->data and tail
 	/* Note. the NIC has set slot->len without virt_hdr_len */
 	skb_put(m, len); // advance m->tail and m->len
-	__builtin_prefetch(m->data);
 	return m;
 }
 

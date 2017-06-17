@@ -605,7 +605,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	u_int const head = kring->rhead;
 	u_int done;
 
-	if (!((struct netmap_vp_adapter *)na)->na_bdg) {
+	if (unlikely(!((struct netmap_vp_adapter *)na)->na_bdg)) {
 		done = head;
 		return 0;
 	}
@@ -634,12 +634,10 @@ csum_transmit:
 			uint16_t *check;
 
 			iph = (struct nm_iphdr *)MBUF_NETWORK_HEADER(m);
-			KASSERT(ntohs(iph->tot_len) >= 46,
-			    ("too small UDP packet %d", ntohs(iph->tot_len)));
 			th = MBUF_TRANSPORT_HEADER(m);
 			if (iph->protocol == IPPROTO_UDP) {
 				check = &((struct nm_udphdr *)th)->check;
-			} else if (iph->protocol == IPPROTO_TCP) {
+			} else if (likely(iph->protocol == IPPROTO_TCP)) {
 				check = &((struct nm_tcphdr *)th)->check;
 			} else {
 				panic("bad proto %u w/ offld", iph->protocol);
@@ -691,6 +689,7 @@ csum_transmit:
 		memcpy(NMB(na, slot) + na->virt_hdr_len, m->data, slot->offset);
 	} else {
 		SD(SD_TX, 1, "mismatch %d, copy entire data", mismatch);
+		RD(1, "mismatch %d, copy entire data", mismatch);
 		m_copydata(m, 0, MBUF_LEN(m), NMB(na, slot) + na->virt_hdr_len);
 		slot->len += mismatch;
 	}
@@ -702,12 +701,12 @@ csum_transmit:
 		int len;
 
 		iph = (struct nm_iphdr *) ((char *)NMB(na, slot) +
-			 na->virt_hdr_len + skb_network_offset(m));
+			 na->virt_hdr_len + MBUF_NETWORK_OFFSET(m));
 		tcph = (struct nm_tcphdr *) ((char *)NMB(na, slot) +
-			 na->virt_hdr_len + skb_transport_offset(m));
+			 na->virt_hdr_len + MBUF_TRANSPORT_OFFSET(m));
 		check = &tcph->check;
 		*check = 0;
-		len = slot->len - na->virt_hdr_len - skb_transport_offset(m);
+		len = slot->len - na->virt_hdr_len - MBUF_TRANSPORT_OFFSET(m);
 		nm_os_csum_tcpudp_ipv4(iph, tcph, len, check);
 	}
 
