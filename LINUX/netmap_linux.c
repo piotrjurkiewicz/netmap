@@ -930,7 +930,9 @@ nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
 	return m;
 }
 
-/* scb must has been populated */
+/* scb must has been populated
+ * XXX Maybe we can exploit return value of netif_receive_skb()
+ * and ip_rcv() for some shortcut */
 int
 nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 {
@@ -951,7 +953,18 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	/* have orphan() set data_destructor */
 	SET_MBUF_DESTRUCTOR(m, nm_os_stackmap_mbuf_destructor);
 	//D("m %p scb %p", m, scb);
+#ifdef NETMAP_LINUX_HAVE_IP_RCV
+	if (ntohs(m->protocol) == ETH_P_IP && 0) {
+		skb_reset_network_header(m);
+		skb_reset_mac_len(m);
+		m->skb_iif = na->ifp->ifindex;
+		rcu_read_lock();
+		ip_rcv(m, na->ifp, NULL, na->ifp);
+		rcu_read_unlock();
+	} else
+#else /* !NETMAP_LINUX_HAVE_IP_RCV */
 	netif_receive_skb(m);
+#endif /* NETMAP_LINUX_HAVE_IP_RCV */
 	ND("m %p state %d mlen %d slot->len %d", m, stackmap_cb_get_state(scb),
 			m->len, slot->len);
 
