@@ -1481,18 +1481,6 @@ EOF
 	}
 EOF
 
-  # check for ip_rcv exported
-  add_test 'have IP_RCV' <<EOF
-	#include <linux/netdevice.h>
-	#include <linux/skbuff.h>
-	#include <net/ip.h>
-
-	void
-	dummy(struct sk_buff *skb) {
-		ip_rcv(skb, NULL,  NULL, NULL);
-	}
-EOF
-
   #####################################################
   # checks related to drivers                         #
   #####################################################
@@ -1778,6 +1766,27 @@ EOF
 	  if cut -f2 $symf | grep -q split_page; then
 		  echo "found in $symf" >> config.log
 		  have SPLIT_PAGE
+	  else
+		  echo "not found in $symf" >> config.log
+	  fi
+  else
+	  echo "$symf file not found" >> config.log
+  fi
+  cat >> config.log <<EOF
+##############################################################################
+EOF
+
+# check for exported ip_rcv
+  cat >> config.log <<EOF
+##############################################################################
+## CHECKING FOR ip_rcv
+##############################################################################
+EOF
+  symf=$ksrc/Module.symvers
+  if [ -e $symf ]; then
+	  if cut -f2 $symf | grep -q ip_rcv; then
+		  echo "found in $symf" >> config.log
+		  have IP_RCV
 	  else
 		  echo "not found in $symf" >> config.log
 	  fi

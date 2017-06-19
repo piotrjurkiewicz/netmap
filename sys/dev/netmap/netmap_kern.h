@@ -1128,7 +1128,8 @@ stackmap_cb_valid(struct stackmap_cb *scb)
 static inline int
 stackmap_cb_get_state(struct stackmap_cb *scb)
 {
-	return stackmap_cb_valid(scb) ? (scb->flags & ~SCB_M_MAGIC_MASK) : 0;
+	return likely(stackmap_cb_valid(scb)) ?
+		(scb->flags & ~SCB_M_MAGIC_MASK) : 0;
 }
 
 int stackmap_reg(struct netmap_adapter *, int onoff); /* for is_bwrap */

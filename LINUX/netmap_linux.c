@@ -868,7 +868,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		struct netmap_slot *slot;
 
 		__builtin_prefetch(scb);
-		if (!kring) {
+		if (unlikely(!kring)) {
 			kring = scb_kring(scb);
 			if (unlikely(!kring))
 				panic("no kring");
@@ -943,18 +943,15 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	int ret = 0;
 
 	m = nm_os_build_mbuf(na, nmb, slot->len);
-	if (!m)
+	if (unlikely(!m))
 		return 0; // drop and skip
 
 	stackmap_cb_set_state(scb, SCB_M_STACK);
-	//skb_put(m, na->virt_hdr_len);
-	//SDPKT(SD_RX, 0, m->data);
 	m->protocol = eth_type_trans(m, m->dev);
 	/* have orphan() set data_destructor */
 	SET_MBUF_DESTRUCTOR(m, nm_os_stackmap_mbuf_destructor);
-	//D("m %p scb %p", m, scb);
 #ifdef NETMAP_LINUX_HAVE_IP_RCV
-	if (ntohs(m->protocol) == ETH_P_IP && 0) {
+	if (ntohs(m->protocol) == ETH_P_IP) {
 		skb_reset_network_header(m);
 		skb_reset_mac_len(m);
 		m->skb_iif = na->ifp->ifindex;
@@ -962,27 +959,20 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 		ip_rcv(m, na->ifp, NULL, na->ifp);
 		rcu_read_unlock();
 	} else
-#else /* !NETMAP_LINUX_HAVE_IP_RCV */
-	netif_receive_skb(m);
 #endif /* NETMAP_LINUX_HAVE_IP_RCV */
-	ND("m %p state %d mlen %d slot->len %d", m, stackmap_cb_get_state(scb),
-			m->len, slot->len);
+	netif_receive_skb(m);
 
 	/* setting data destructor is safe only after skb_orphan_frag()
 	 * in __netif_receive_skb_core().
 	 */
-	if (stackmap_cb_get_state(scb) == SCB_M_STACK) {
+	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(kring, slot)) {
-			SD(SD_QUE, 0, "no extra room nmb %p slot %p scb %p",
-				NMB(kring->na, slot), slot, scb);
 			ret = -EBUSY;
 		}
-		SD(SD_QUE, 0, "enqueued nmb %p scb %p", NMB(na, slot), scb);
 	}
 	return ret;
 }
-#undef MBUF_BUMPUP
 
 int
 nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
@@ -1016,27 +1006,23 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	if (unlikely(err < 0)) {
 		/* XXX check if it is enough to assume EAGAIN only */
 		if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
-			D("sendpage() error with unexpected state %d",
-					stackmap_cb_get_state(scb));
-			panic("x");
+			panic("unexpected sendpage() error");
 		}
-		SD(SD_TX, 0, "error %d in sendpage() slot %ld",
+		ND(1, "error %d in sendpage() slot %ld",
 				err, slot - kring->ring->slot);
 		stackmap_cb_invalidate(scb);
 		return -EAGAIN;
 	}
 
 	if (unlikely(stackmap_cb_get_state(scb) == SCB_M_STACK)) {
-		/* XXX The stack might have just dropped the page
-		 * reference (e.g., linearized in skb_checksum_help()
-		 * of __dev_queue_xmit().
+		/* The stack might have just dropped a page reference (e.g.,
+		 * linearized in skb_checksum_help() in __dev_queue_xmit().
 		 */
 		if (unlikely(pageref == page_ref_count(page))) {
 			D("WARNING: just dropped frag ref (fd %d)", slot->fd);
 			stackmap_cb_invalidate(scb);
 			return 0;
 		}
-		SD(SD_QUE, 0, "enqueuing scb %p (0x%08x)", scb, scb->flags);
 		stackmap_cb_set_state(scb, SCB_M_QUEUED);
 		if (stackmap_extra_enqueue(kring, slot)) {
 			return -EBUSY;
