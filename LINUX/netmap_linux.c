@@ -963,8 +963,7 @@ nm_os_build_mbuf(struct netmap_kring *kring, char *buf, u_int len)
 	page = virt_to_page(buf);
 	get_page(page); // survive __kfree_skb()
 	skb_reserve(m, na->virt_hdr_len); // m->data and tail
-	/* Note. the NIC has set slot->len without virt_hdr_len */
-	skb_put(m, len); // advance m->tail and m->len
+	skb_put(m, len - na->virt_hdr_len); // advance m->tail and m->len
 	return m;
 }
 

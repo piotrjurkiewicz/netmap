@@ -544,6 +544,8 @@ struct nm_ubuf_info {
 	(scb)->ui.ubuf.ctx = (kring);\
 	(scb)->ui.ubuf.desc = (uintptr_t)(slot);\
 } while (0)
+#define DISABLE_IRQ	local_bh_disable
+#define ENABLE_IRQ	local_bh_enable
 
 static inline void
 nm_set_mbuf_data_destructor(struct mbuf *m,

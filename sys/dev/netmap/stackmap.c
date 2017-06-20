@@ -356,8 +356,9 @@ stackmap_kr_rxspace(struct netmap_kring *k)
 	return k->nkr_num_slots - 1 - busy;
 }
 
+/* bdg_{r,w}lock() must be held */
 static int
-stackmap_bdg_flush(struct netmap_kring *kring, int locked)
+stackmap_bdg_flush(struct netmap_kring *kring)
 {
 	int k = kring->nr_hwcur, j;
 	u_int lim_tx = kring->nkr_num_slots - 1;
@@ -381,15 +382,10 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	leftover = ft->npkts;
 	nonfree = ft->tmp;
 
-	if (likely(!locked) && netmap_bdg_rlock(vpna->na_bdg, na)) {
-		RD(1, "failed to obtain rlock");
-		return k;
-	}
-
 	/* XXX perhaps this is handled later? */
 	if (unlikely(netmap_bdg_active_ports(vpna->na_bdg) < 3)) {
 		RD(1, "only 1 or 2 active ports");
-		goto unlock_out;
+		goto out;
 	}
 
 	/* let the host stack packets go earlier */
@@ -398,7 +394,6 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
 	} else {
 		rxna = stackmap_master(na);
-		local_bh_disable();
 		rx = 1;
 	}
 
@@ -412,6 +407,8 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		if (unlikely(slot->len == 0)) {
 			continue;
 		}
+		if (rx) // XXX ugly to do here..
+			slot->len += na->virt_hdr_len;
 		scb = STACKMAP_CB_NMB(nmb, bufsiz);
 		scbw(scb, kring, slot);
 		if (host) {
@@ -447,7 +444,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 	mtx_lock(&rxkring->q_lock);
 	if (unlikely(rxkring->nkr_stopped)) {
 		mtx_unlock(&rxkring->q_lock);
-		goto unlock_out;
+		goto out;
 	}
 	howmany = stackmap_kr_rxspace(rxkring);
 	if (howmany < ft->npkts) { // try to reclaim completed buffers
@@ -538,11 +535,7 @@ stackmap_bdg_flush(struct netmap_kring *kring, int locked)
 		}
 		k = j;
 	}
-unlock_out:
-	if (rx)
-		local_bh_enable();
-	if (likely(!locked))
-		netmap_bdg_runlock(vpna->na_bdg);
+out:
 	return k;
 }
 
@@ -595,16 +588,26 @@ static int
 stackmap_txsync(struct netmap_kring *kring, int flags)
 {
 	struct netmap_adapter *na = kring->na;
+	struct netmap_vp_adapter *vpna = (struct netmap_vp_adapter *)na;
 	u_int const head = kring->rhead;
 	u_int done;
 
-	if (unlikely(!((struct netmap_vp_adapter *)na)->na_bdg)) {
+	if (unlikely(!vpna->na_bdg)) {
 		done = head;
 		return 0;
 	}
-	done = stackmap_bdg_flush(kring, 0);
+	DISABLE_IRQ();
+	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
+		RD(1, "failed to obtain rlock");
+		goto out;
+	}
+	done = stackmap_bdg_flush(kring);
+	netmap_bdg_runlock(vpna->na_bdg);
+
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
+out:
+	ENABLE_IRQ();
 	return 0;
 }
 
@@ -1107,7 +1110,7 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		if (stackmap_cb_valid(scb)) {
 			nm_os_stackmap_data_ready(sk);
 			kring = scb_kring(scb); // XXX assume same across the q
-			stackmap_bdg_flush(kring, 1);
+			stackmap_bdg_flush(kring);
 		}
 	}
 	nm_os_sock_fput(sk);
