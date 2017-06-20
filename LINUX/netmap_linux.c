@@ -40,6 +40,7 @@
 #include <net/sock.h> // sock_owned_by_user
 
 #include "netmap_linux_config.h"
+#define STACKMAP_RECYCLE
 
 void *
 nm_os_malloc(size_t size)
@@ -866,8 +867,8 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 		struct netmap_slot *slot;
+		int queued = 0;
 
-		__builtin_prefetch(scb);
 		if (unlikely(!kring)) {
 			kring = scb_kring(scb);
 			if (unlikely(!kring))
@@ -880,7 +881,17 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
 		stackmap_add_fdtable(scb, kring);
 		/* see comment in stackmap_transmit() */
+#ifdef STACKMAP_RECYCLE
+		if (unlikely(stackmap_cb_get_state(scb) == SCB_M_QUEUED))
+			queued = 1;
+#endif
 		stackmap_cb_set_state(scb, SCB_M_TXREF);
+#ifdef STACKMAP_RECYCLE
+		if (likely(!queued)) {
+			__skb_unlink(m, queue);
+			skb_orphan(m);
+		} else
+#endif
 		sk_eat_skb(sk, m);
 		//D("ate %p state %x", m, stackmap_cb_get_state(scb));
 		count++;
@@ -904,26 +915,53 @@ nm_os_sock_fput(NM_SOCK_T *sk)
 	sockfd_put(sk->sk_socket);
 }
 
-/* This method + kfree_skb() drops packet rates from 14.5 to 9.5 Mpps
+static inline int
+nm_os_mbuf_valid(struct mbuf *m)
+{
+	return likely(*(int *)(&m->users) != 0);
+}
+
+/* build_skb() + kfree_skb() drops packet rates from 14.5 to 9.5 Mpps
  * at 2.8 Ghz CPU, and netif_receive_skb() to drop packet does so to
  * 6 Mpps.
- * Since we always allocate the same head size of skb, we
- * could batch allocation.
  * Anyways alloc/dealloc overhead of 200 ns is not that bad.
  */
 static struct mbuf *
-nm_os_build_mbuf(struct netmap_adapter *na, char *buf, u_int len)
+nm_os_build_mbuf(struct netmap_kring *kring, char *buf, u_int len)
 {
+	struct netmap_adapter *na = kring->na;
 	struct mbuf *m;
 	struct page *page;
+	int alen = NETMAP_BUF_SIZE(na) - sizeof(struct stackmap_cb);
 
-	m = build_skb(buf, NETMAP_BUF_SIZE(na) - sizeof(struct stackmap_cb));
-	if (!m)
+#ifdef STACKMAP_RECYCLE
+	m = kring->tx_pool[1];
+	if (m) {
+		struct skb_shared_info *shinfo;
+
+		if (unlikely(!nm_os_mbuf_valid(kring->tx_pool[0])))
+			panic("invalid m0");
+		*m = *kring->tx_pool[0];
+		m->head = m->data = buf;
+		skb_reset_tail_pointer(m);
+		shinfo = skb_shinfo(m);
+		bzero(shinfo, offsetof(struct skb_shared_info, dataref));
+		*(int *)(&shinfo->dataref) = 1;
+	} else
+#endif
+	{
+		m = build_skb(buf, alen);
+		m->dev = na->ifp;
+	}
+	if (unlikely(!m))
 		return NULL;
-	__builtin_prefetch(m->data);
+#ifdef STACKMAP_RECYCLE
+	else if (unlikely(!nm_os_mbuf_valid(kring->tx_pool[0]))) {
+		*kring->tx_pool[0] = *m;
+	}
+#endif
 	page = virt_to_page(buf);
 	get_page(page); // survive __kfree_skb()
-	m->dev = na->ifp;
 	skb_reserve(m, na->virt_hdr_len); // m->data and tail
 	/* Note. the NIC has set slot->len without virt_hdr_len */
 	skb_put(m, len); // advance m->tail and m->len
@@ -942,7 +980,7 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	struct mbuf *m;
 	int ret = 0;
 
-	m = nm_os_build_mbuf(na, nmb, slot->len);
+	m = nm_os_build_mbuf(kring, nmb, slot->len);
 	if (unlikely(!m))
 		return 0; // drop and skip
 
@@ -971,6 +1009,22 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 			ret = -EBUSY;
 		}
 	}
+
+#ifdef STACKMAP_RECYCLE
+	if (stackmap_cb_get_state(scb) == SCB_M_TXREF &&
+	    likely((atomic_read(&m->users) == 1) /* XXX avoid this check */)) {
+		/* we can recycle this mbuf (see nm_os_stackmap_data_ready) */
+		struct ubuf_info *uarg = skb_shinfo(m)->destructor_arg;
+
+		if (likely(uarg->callback))
+			uarg->callback(uarg, true);
+		else
+			D("WARNING: no destructor on recycling mbuf!");
+		kring->tx_pool[1] = m;
+	} else {
+		kring->tx_pool[1] = NULL;
+	}
+#endif
 	return ret;
 }
 

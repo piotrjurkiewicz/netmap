@@ -829,11 +829,20 @@ stackmap_mbufpool_alloc(struct netmap_adapter *na)
 			error = ENOMEM;
 			break;
 		}
+		bzero(kring->tx_pool, na->num_tx_desc * sizeof(struct mbuf *));
+		kring->tx_pool[0] = nm_os_malloc(sizeof(struct mbuf));
+		if (!kring->tx_pool[0]) {
+			error = ENOMEM;
+			break;
+		}
+		bzero(kring->tx_pool[0], sizeof(struct mbuf));
 	}
 	if (error) {
 		for_each_tx_kring(r, kring, na) {
 			if (kring->tx_pool == NULL)
 				continue;
+			if (kring->tx_pool[0])
+				nm_os_free(kring->tx_pool[0]);
 			nm_os_free(kring->tx_pool);
 			kring->tx_pool = NULL;
 		}
@@ -850,6 +859,8 @@ stackmap_mbufpool_free(struct netmap_adapter *na)
 	for_each_tx_kring(r, kring, na) {
 		if (kring->tx_pool == NULL)
 			continue;
+		if (kring->tx_pool[0])
+			nm_os_free(kring->tx_pool[0]);
 		nm_os_free(kring->tx_pool);
 		kring->tx_pool = NULL;
 	}
