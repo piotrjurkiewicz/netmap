@@ -368,7 +368,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	struct netmap_adapter *rxna;
 	struct stackmap_bdgfwd *ft;
 	int32_t n, lim_rx, howmany;
-	u_int dring;
+	u_int dst_nr, nrings;
 	struct netmap_kring *rxkring;
 	bool rx = 0, host = stackmap_is_host(na);
 	int leftover, fd;
@@ -433,9 +433,11 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	if (unlikely(!nm_netmap_on(rxna))) {
 		panic("receiver na off");
 	}
-	dring = kring - NMR(kring->na, NR_TX);
-	nm_bound_var(&dring, 0, 0, rxna->num_rx_rings, NULL);
-	rxkring = NMR(rxna, NR_RX) + dring;
+	dst_nr = kring - NMR(kring->na, NR_TX);
+	nrings = rxna->num_rx_rings;
+	if (dst_nr >= nrings)
+		dst_nr = dst_nr % nrings;
+	rxkring = NMR(rxna, NR_RX) + dst_nr;
 	lim_rx = rxkring->nkr_num_slots - 1;
 	j = rxkring->nr_hwtail;
 
