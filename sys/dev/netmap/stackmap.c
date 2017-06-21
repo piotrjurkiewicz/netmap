@@ -89,7 +89,9 @@ stackmap_is_host(struct netmap_adapter *na)
 	return na->nm_register == NULL;
 }
 
-/* nm_notify() for NIC RX */
+/* nm_notify() for NIC RX.
+ * Deliver interrupts to the same ring index of master if possible
+ */
 static int
 stackmap_intr_notify(struct netmap_kring *kring, int flags)
 {
@@ -106,17 +108,19 @@ stackmap_intr_notify(struct netmap_kring *kring, int flags)
 	    kring <= NMR(na, NR_TX) + na->num_tx_rings) {
 		t = NR_TX;
 	}
+	if (unlikely(t == NR_TX))
+		ND("ignore TX interrupts");
 
 	/* just wakeup the client on the master */
 	mna = stackmap_master(vpna);
 	if (likely(mna)) {
 		struct netmap_kring *mkring;
-		u_int me = kring - NMR(na, t), mnr;
+		u_int me = kring - NMR(na, t), last;
 
 		if (stackmap_no_runtocomp)
 			return netmap_bwrap_intr_notify(kring, flags);
-		mnr = t == NR_RX ? mna->num_rx_rings : mna->num_tx_rings;
-		mkring = &NMR(mna, t)[mnr > me ? me : 0];
+		last = t == NR_RX ? mna->num_rx_rings : mna->num_tx_rings;
+		mkring = &NMR(mna, t)[last > me ? me : me % last];
 		mkring->nm_notify(mkring, 0);
 	}
 	return NM_IRQ_COMPLETED;
@@ -559,7 +563,8 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 		struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 		struct netmap_adapter *na = &vpna->up;
 		struct netmap_adapter *hwna;
-		struct netmap_kring *hwkring, *hkring;
+		struct netmap_kring *hwkring, *hostkring;
+		u_int first, stride, last, i;
 	
 		if (netmap_bdg_idx(vpna) == netmap_bdg_idx(&sna->up))
 			continue;
@@ -571,15 +576,22 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 		/* We assume the same number of hwna with vpna
 		 * (see netmap_bwrap_attach()) */
 		hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
-		hwkring = NMR(hwna, NR_RX) + (na->num_tx_rings > me ? me : 0);
-		hkring = &NMR(hwna, NR_RX)[na->num_rx_rings];
-		if (stackmap_host_batch)
-			hkring->nr_kflags |= NKR_INSYNC;
-		netmap_bwrap_intr_notify(hwkring, flags);
-		if (stackmap_host_batch) {
-			hkring->nr_kflags &= ~NKR_INSYNC;
-			/* flush packets sent by the host */
-			netmap_bwrap_intr_notify(hkring, flags);
+
+		/* hw ring(s) to scan */
+		first = kring->na->num_rx_rings > 1 ? me : 0;
+		stride = kring->na->num_rx_rings;
+		last = na->num_rx_rings;
+		hostkring = &NMR(hwna, NR_RX)[last];
+		for (i = first; i < last; i += stride) {
+			hwkring = &NMR(hwna, NR_RX)[i];
+			if (stackmap_host_batch)
+				hostkring->nr_kflags |= NKR_INSYNC;
+			netmap_bwrap_intr_notify(hwkring, 0);
+			if (stackmap_host_batch) {
+				/* flush packets sent by the host */
+				hostkring->nr_kflags &= ~NKR_INSYNC;
+				netmap_bwrap_intr_notify(hostkring, 0);
+			}
 		}
 	}
 	return 0;

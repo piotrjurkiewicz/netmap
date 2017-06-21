@@ -546,6 +546,7 @@ struct nm_ubuf_info {
 } while (0)
 #define DISABLE_IRQ	local_bh_disable
 #define ENABLE_IRQ	local_bh_enable
+#define curcpu		smp_processor_id()
 
 static inline void
 nm_set_mbuf_data_destructor(struct mbuf *m,
