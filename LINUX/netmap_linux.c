@@ -871,8 +871,15 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 
 		if (unlikely(!kring)) {
 			kring = scb_kring(scb);
-			if (unlikely(!kring))
-				panic("no kring");
+			/* XXX this happens when stackmap goes away.
+			 * We need better workaround */
+			if (unlikely(!kring)) {
+				RD(1, "WARNING: no kring");
+				SET_MBUF_DESTRUCTOR(m, NULL);
+				nm_set_mbuf_data_destructor(m, &scb->ui, NULL);
+				sk_eat_skb(sk, m);
+				continue;
+			}
 		}
 		/* append this buffer to the scratchpad */
 		slot = scb_slot(scb);
@@ -978,6 +985,8 @@ nm_os_stackmap_recv(struct netmap_kring *kring, struct netmap_slot *slot)
 	struct stackmap_cb *scb = STACKMAP_CB_NMB(nmb, NETMAP_BUF_SIZE(na));
 	struct mbuf *m;
 	int ret = 0;
+
+	slot->len += na->virt_hdr_len; // Ugly to do here...
 
 	m = nm_os_build_mbuf(kring, nmb, slot->len);
 	if (unlikely(!m))

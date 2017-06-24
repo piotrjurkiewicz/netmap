@@ -2073,57 +2073,11 @@ void nm_os_mitigation_cleanup(struct nm_generic_mit *mit);
 #endif /* WITH_GENERIC */
 
 #ifdef WITH_STACK
-extern int stackmap_verbose;
 extern int stackmap_no_runtocomp;
-#define NM_ETHTYPE(p)	(ntohs(*(uint16_t *)((uint8_t *)(p)+12)))
-#define NM_IPHDR(p)	((struct nm_iphdr *)((uint8_t *)(p)+14))
-#define NM_IPLEN(p)	(ntohs(NM_IPHDR(p)->tot_len))
-#define NM_IPHLEN(p)	((NM_IPHDR(p)->version_ihl & 0x0F) << 2)
-#define NM_TCPHDR(p)	(NM_IPHDR(p)->protocol == IPPROTO_TCP ? \
-				(struct nm_tcphdr *)\
-				((uint8_t *)NM_IPHDR(p) + NM_IPHLEN(p)) : NULL)
-#define NM_TCPHLEN(p)	(NM_IPHDR(p)->protocol == IPPROTO_TCP ? \
-				(NM_TCPHDR(p)->doff >> 4) * 4 : 0)
-#define NM_TCPFLAG(p)	(NM_TCPHDR(p) ? NM_TCPHDR(p)->flags : 0)
-#define NM_TCPSEQ(p)	(NM_TCPHDR(p) ? ntohl(NM_TCPHDR(p)->seq) : 0)
-#define NM_TCPEND(p)	(NM_TCPHDR(p) ? (NM_TCPSEQ(p) + \
-			    (NM_IPLEN(p) - NM_IPHLEN(p) - NM_TCPHLEN(p))) : 0)
-#define NM_TCPACK(p)	(NM_TCPHDR(p) ? ntohl(NM_TCPHDR(p)->ack_seq) : 0)
-#define SDPKT(level, lps, p) \
-	do {\
-		if ((stackmap_verbose & (level)) != (level)) \
-			break;\
-		if (lps)\
-		  RD(lps, "%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
-		    NM_ETHTYPE(p), NM_TCPFLAG(p), NM_TCPSEQ(p), NM_TCPEND(p),\
-		    NM_TCPACK(p));\
-		else \
-		  D("%p p 0x%04x tcpflag 0x%02x, seq %u-%u ack %u", p,\
-		    NM_ETHTYPE(p), NM_TCPFLAG(p), NM_TCPSEQ(p), NM_TCPEND(p),\
-		    NM_TCPACK(p));\
-	} while (0)
-
-#define SD_TX		0x01
-#define SD_RX		0x02
-#define SD_HOST	0x04
-#define SD_QUE	0x08
-#define SD_GEN	0x10
-#define SD(level, lps, format, ...) \
-	do {\
-		if ((stackmap_verbose & (level)) == (level)) { \
-			if (lps) \
-				RD(lps, format, ##__VA_ARGS__); \
-			else \
-			       	D(format, ##__VA_ARGS__); \
-		} \
-	} while (0)
-
-//struct mbuf * nm_os_build_mbuf(struct netmap_adapter *, char *, u_int);
 int nm_os_stackmap_recv(struct netmap_kring *, struct netmap_slot *);
 int nm_os_stackmap_send(struct netmap_kring *, struct netmap_slot *);
 struct stackmap_sk_adapter * stackmap_ska_from_fd(struct netmap_adapter *, int);
 int stackmap_extra_enqueue(struct netmap_kring *, struct netmap_slot *);
-//#define STACKMAP_LINEAR
 #ifndef STACKMAP_LINEAR
 void stackmap_extra_dequeue(struct netmap_kring *, struct netmap_slot *);
 #endif

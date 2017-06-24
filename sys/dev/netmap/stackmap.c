@@ -411,8 +411,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		if (unlikely(slot->len == 0)) {
 			continue;
 		}
-		if (rx) // XXX ugly to do here..
-			slot->len += na->virt_hdr_len;
 		scb = STACKMAP_CB_NMB(nmb, bufsiz);
 		scbw(scb, kring, slot);
 		if (host) {
@@ -480,11 +478,12 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			struct netmap_slot tmp, *ts, *rs;
 			struct stackmap_cb *scb;
 
+			rs = &rxkring->ring->slot[j];
+			__builtin_prefetch(rs);
 			tmp.buf_idx = next;
 			scb = STACKMAP_CB_NMB(NMB(na, &tmp), bufsiz);
 			next = scb->next;
 			ts = scb_slot(scb);
-			rs = &rxkring->ring->slot[j];
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
 				nonfree[nonfree_num++] = j;
 			}
@@ -883,6 +882,7 @@ stackmap_mbufpool_free(struct netmap_adapter *na)
 	}
 }
 
+/* Stackmap extends default bwrap_reg() and bwrap_attach() */
 int
 stackmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 {
@@ -1013,13 +1013,29 @@ stackmap_reg_slaves(struct netmap_adapter *na)
 			netmap_adapter_put(slave);
 			continue;
 		}
+		{
+			struct netmap_bwrap_adapter *bna =
+				(struct netmap_bwrap_adapter *)slave;
+			struct netmap_adapter *tmp[3] =
+				{&bna->up.up, bna->hwna, &bna->host.up};
+			int i;
+
+			for (i = 0; i < 3; i++) {
+				struct netmap_adapter *a = tmp[i];
+				D("%s rings %d %d real %d %d", a->name,
+					nma_get_nrings(a, NR_TX),
+					nma_get_nrings(a, NR_RX),
+					netmap_real_rings(a, NR_TX),
+					netmap_real_rings(a, NR_RX));
+			}
+		}
 	}
 	nm_os_free(s_orig);
 	return error;
 }
 
 /*
- * When stackmap dies first, it simply restore all the socket
+ * When stackmap dies first, it simply restores all the socket
  * information on dtor().
  * Otherwise our sk->sk_destructor will cleanup stackmap states
  */
