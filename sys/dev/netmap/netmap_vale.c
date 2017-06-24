@@ -2550,7 +2550,7 @@ netmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 			na->na_flags &= ~NAF_NETMAP_ON;
 
 		/* reset all notify callbacks (including host ring) */
-		for (i = 0; i <= netmap_real_rings(hwna, NR_RX); i++) {
+		for (i = 0; i < netmap_real_rings(hwna, NR_RX); i++) {
 			hwna->rx_rings[i].nm_notify =
 				hwna->rx_rings[i].save_notify;
 			hwna->rx_rings[i].save_notify = NULL;
