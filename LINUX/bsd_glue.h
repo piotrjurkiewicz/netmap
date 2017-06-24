@@ -547,6 +547,7 @@ struct nm_ubuf_info {
 #define DISABLE_IRQ	local_bh_disable
 #define ENABLE_IRQ	local_bh_enable
 #define curcpu		smp_processor_id()
+#define mp_maxid	(num_online_cpus() - 1) // XXX num_possible_cpus()?
 
 static inline void
 nm_set_mbuf_data_destructor(struct mbuf *m,

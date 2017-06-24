@@ -698,6 +698,7 @@ struct netmap_adapter {
 				  * cannot be registered from userspace
 				  */
 #define NAF_BDG_MBUF    512     /* mem wants parallel mbufs */
+#define NAF_HOST_MQ	1024	/* multiple host rings */
 	int active_fds; /* number of user-space descriptors using this
 			 interface, which is equal to the number of
 			 struct netmap_if objs in the mapped region. */
@@ -971,7 +972,11 @@ struct netmap_generic_adapter {	/* emulated device */
 static __inline int
 netmap_real_rings(struct netmap_adapter *na, enum txrx t)
 {
-	return nma_get_nrings(na, t) + !!(na->na_flags & NAF_HOST_RINGS);
+	u_int host = !!(na->na_flags & NAF_HOST_RINGS);
+
+	if (host && na->na_flags & NAF_HOST_MQ)
+		host = nma_get_nrings(na, t);
+	return nma_get_nrings(na, t) + host;
 }
 
 #ifdef WITH_VALE
@@ -1688,6 +1693,7 @@ enum {                                  /* verbose flags */
 };
 
 extern int netmap_txsync_retry;
+extern int netmap_host_mq;
 extern int netmap_flags;
 extern int netmap_generic_mit;
 extern int netmap_generic_ringsize;
