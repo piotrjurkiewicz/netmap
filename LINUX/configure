@@ -1346,6 +1346,15 @@ EOF
 EOF
   done
 
+# page_to_virt
+  add_test 'have PAGE_TO_VIRT' <<EOF
+  	#include <linux/mm.h>
+	void *
+	dummy(struct page *page) {
+		return page_to_virt(page);
+	}
+EOF
+
 # check for third argument in qdisc enqueue callbacks
   add_test 'have QDISC_ENQUEUE_TOFREE' <<EOF
 	#include <net/sch_generic.h>

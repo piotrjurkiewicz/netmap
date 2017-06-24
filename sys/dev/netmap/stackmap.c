@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2017 NetApp. Inc.
  * Copyright (C) 2017 NEC Europe Ltd.
+ * Copyright (C) 2017 Michio Honda
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1135,8 +1136,6 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	if (m) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 
-		ND("m %p scb %p state %x destruct set %d data_destruct set %d refcnt %d", m, scb, stackmap_cb_get_state(scb), m->destructor == nm_os_stackmap_mbuf_destructor,
-			scb->ui.ubuf.callback == nm_os_stackmap_mbuf_data_destructor, atomic_read(&m->users));
 		if (stackmap_cb_valid(scb)) {
 			nm_os_stackmap_data_ready(sk);
 			kring = scb_kring(scb); // XXX assume same across the q

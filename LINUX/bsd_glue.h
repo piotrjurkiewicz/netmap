@@ -72,6 +72,9 @@
 #ifdef NETMAP_LINUX_HAVE_PAGE_REF
 #include <linux/page_ref.h>
 #endif /* NETMAP_LINUX_HAVE_PAGE_REF */
+#ifndef NETMAP_LINUX_HAVE_PAGE_TO_VIRT
+#define page_to_virt(x)	__va(PFN_PHYS(page_to_pfn(x)))
+#endif /* NETMAP_LINUX_HAVE_PAGE_TO_VIRT */
 
 #ifndef NETMAP_LINUX_HAVE_HRTIMER_MODE_REL
 #define HRTIMER_MODE_REL	HRTIMER_REL
