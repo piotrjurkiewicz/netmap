@@ -1227,12 +1227,6 @@ _nm_num_host_rings(struct netmap_adapter *na, int t)
 	return netmap_real_rings(na, t) - nma_get_nrings(na, t);
 }
 
-static inline int
-_nm_host_lockless(struct netmap_adapter *na, int nhosts)
-{
-	return (na->na_flags & NAF_HOST_MQ) && mp_maxid < nhosts;
-}
-
 /*
  * netmap_txsync_to_host() passes packets up. We are called from a
  * system call in user process context, and the only contention
@@ -1282,15 +1276,10 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 	u_int const head = kring->rhead;
 	int ret = 0;
 	struct mbq *q = &kring->rx_queue, fq;
-	int nolock = 0;
 
 	mbq_init(&fq); /* fq holds packets to be freed */
 
-	nolock = _nm_host_lockless(na, _nm_num_host_rings(na, NR_RX));
-	if (!nolock) {
-		mbq_lock(q);
-	}
-
+	mbq_lock(q);
 
 	/* First part: import newly received packets */
 	n = mbq_len(q);
@@ -1334,8 +1323,7 @@ netmap_rxsync_from_host(struct netmap_kring *kring, int flags)
 		kring->nr_hwcur = head;
 	}
 
-	if (!nolock)
-		mbq_unlock(q);
+	mbq_unlock(q);
 
 	mbq_purge(&fq);
 	mbq_fini(&fq);
@@ -3151,12 +3139,11 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct mbq *q;
 	int busy;
 	uint8_t *buf;
-	u_int n, i, nolock = 0;
+	u_int n, i;
 
 	n = _nm_num_host_rings(na, NR_RX);
 	i = curcpu % n;
 	kring = &na->rx_rings[nma_get_nrings(na, NR_RX) + i];
-	nolock = _nm_host_lockless(na, n);
 
 	// XXX [Linux] we do not need this lock
 	// if we follow the down/configure/up protocol -gl
@@ -3202,8 +3189,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * We enqueue the mbuf only if we are sure there is going to be
 	 * enough room in the host RX ring, otherwise we drop it.
 	 */
-	if (!nolock)
-		mbq_lock(q);
+	mbq_lock(q);
 
         busy = kring->nr_hwtail - kring->nr_hwcur;
         if (busy < 0)
@@ -3218,8 +3204,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 		m = NULL;
 		error = 0;
 	}
-	if (!nolock)
-		mbq_unlock(q);
+	mbq_unlock(q);
 
 done:
 	if (m)
