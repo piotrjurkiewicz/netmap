@@ -362,10 +362,9 @@ stackmap_kr_rxspace(struct netmap_kring *k)
 }
 
 /* bdg_{r,w}lock() must be held */
-static int
+static void
 stackmap_bdg_flush(struct netmap_kring *kring)
 {
-	int k = kring->nr_hwcur, j;
 	u_int lim_tx = kring->nkr_num_slots - 1;
 	struct netmap_adapter *na = kring->na;
 	struct netmap_vp_adapter *vpna =
@@ -376,10 +375,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	u_int dst_nr, nrings;
 	struct netmap_kring *rxkring;
 	bool rx = 0, host = stackmap_is_host(na);
-	int leftover, fd;
+	int leftover, fd, j;
 	u_int nonfree_num = 0;
 	uint32_t *nonfree, next, sent = 0;
-	const int rhead = kring->rhead;
 	const int bufsiz = NETMAP_BUF_SIZE(na);
 	struct stackmap_bdg_q *bq;
 
@@ -390,49 +388,16 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	/* XXX perhaps this is handled later? */
 	if (unlikely(netmap_bdg_active_ports(vpna->na_bdg) < 3)) {
 		RD(1, "only 1 or 2 active ports");
-		goto out;
+		return;
 	}
-
-	/* let the host stack packets go earlier */
-
-	if (na == stackmap_master(na) || host) {
-		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
-	} else {
-		rxna = stackmap_master(na);
-		rx = 1;
-		//DISABLE_IRQ();
-	}
-
-	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
-		struct netmap_slot *slot = &kring->ring->slot[k];
-		struct stackmap_cb *scb;
-		char *nmb = NMB(na, slot);
-		int error;
-
-		__builtin_prefetch(nmb);
-		if (unlikely(slot->len == 0)) {
-			continue;
-		}
-		scb = STACKMAP_CB_NMB(nmb, bufsiz);
-		scbw(scb, kring, slot);
-		if (host) {
-			slot->fd = STACKMAP_FD_HOST;
-			stackmap_cb_set_state(scb, SCB_M_NOREF);
-			stackmap_add_fdtable(scb, kring);
-			continue;
-		}
-		error = rx ? nm_os_stackmap_recv(kring, slot) :
-			     nm_os_stackmap_send(kring, slot);
-		if (unlikely(error)) {
-			/* Must be EBUSY (TX/RX) or EAGAIN (TX) */
-			if (error == -EBUSY)
-				k = nm_next(k, lim_tx);
-			break;
-		}
-	}
-	kring->nkr_hwlease = k; // next position to throw into the stack
-
 	/* Now, we know how many packets go to the receiver */
+
+	if (!(na == stackmap_master(na) || host)) {
+		rx = 1;
+		rxna = stackmap_master(na);
+	} else
+		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
+
 
 	if (unlikely(!nm_netmap_on(rxna))) {
 		panic("receiver na off");
@@ -450,7 +415,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	mtx_lock(&rxkring->q_lock);
 	if (unlikely(rxkring->nkr_stopped)) {
 		mtx_unlock(&rxkring->q_lock);
-		goto out;
+		return;
 	}
 	howmany = stackmap_kr_rxspace(rxkring);
 	if (howmany < ft->npkts) { // try to reclaim completed buffers
@@ -525,8 +490,67 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			break;
 		}
 	}
+	return;
+}
 
-	if (k != rhead) { // we have leftover, cannot report k
+/* Form fdtable to be flushed */
+static int
+stackmap_bdg_preflush(struct netmap_kring *kring)
+{
+	struct netmap_adapter *na = kring->na;
+	struct netmap_vp_adapter *vpna = (struct netmap_vp_adapter *)na;
+	int k = kring->nr_hwcur, j;
+	u_int lim_tx = kring->nkr_num_slots - 1;
+	const int rhead = kring->rhead;
+	const int bufsiz = NETMAP_BUF_SIZE(na);
+	int rx = 0, host = stackmap_is_host(na);
+	struct stackmap_bdgfwd *ft = stackmap_get_bdg_fwd(kring);
+
+	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
+		RD(1, "failed to obtain rlock (rx %d host %d)", rx, host);
+		return k;
+	}
+	if (!(na == stackmap_master(na) || host))
+		rx = 1;
+	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
+		struct netmap_slot *slot = &kring->ring->slot[k];
+		struct stackmap_cb *scb;
+		char *nmb = NMB(na, slot);
+		int error;
+
+		__builtin_prefetch(nmb);
+		if (unlikely(slot->len == 0)) {
+			continue;
+		}
+		scb = STACKMAP_CB_NMB(nmb, bufsiz);
+		scbw(scb, kring, slot);
+		if (host) {
+			slot->fd = STACKMAP_FD_HOST;
+			stackmap_cb_set_state(scb, SCB_M_NOREF);
+			stackmap_add_fdtable(scb, kring);
+			continue;
+		}
+		error = rx ? nm_os_stackmap_recv(kring, slot) :
+			     nm_os_stackmap_send(kring, slot);
+		if (unlikely(error)) {
+			/*
+			 * -EAGAIN (TX) could occur due to user misbehavior
+			 * (e.g., not having registered socket), so we stop
+			 * processing here. On the other hand -EBUSY (TX/RX)
+			 * could happen due to exhauston of extra buffers for
+			 * queued packets, which is less-controllable by the
+			 * user.
+			 */
+			if (error == -EBUSY)
+				k = nm_next(k, lim_tx);
+			break;
+		}
+	}
+	kring->nkr_hwlease = k; // next position to throw into the stack
+
+	stackmap_bdg_flush(kring);
+
+	if (ft->npkts) { // we have leftover, cannot report k
 		/* try to reclaim buffers on txring */
 		for (j = kring->nr_hwcur; j != k; j = nm_next(j, lim_tx)) {
 			struct netmap_slot *slot = &kring->ring->slot[j];
@@ -542,9 +566,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		}
 		k = j;
 	}
-out:
-	//if (rx)
-		//ENABLE_IRQ();
+	netmap_bdg_runlock(vpna->na_bdg);
 	return k;
 }
 
@@ -615,18 +637,10 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		done = head;
 		return 0;
 	}
-	//DISABLE_IRQ();
-	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
-		RD(1, "failed to obtain rlock");
-		goto out;
-	}
-	done = stackmap_bdg_flush(kring);
-	netmap_bdg_runlock(vpna->na_bdg);
+	done = stackmap_bdg_preflush(kring);
 
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
-out:
-	//ENABLE_IRQ();
 	return 0;
 }
 
