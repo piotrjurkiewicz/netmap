@@ -400,6 +400,7 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	} else {
 		rxna = stackmap_master(na);
 		rx = 1;
+		//DISABLE_IRQ();
 	}
 
 	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
@@ -542,6 +543,8 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 		k = j;
 	}
 out:
+	//if (rx)
+		//ENABLE_IRQ();
 	return k;
 }
 
@@ -559,6 +562,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 		return err;
 	if (stackmap_no_runtocomp)
 		return 0;
+	DISABLE_IRQ();
 	for_bdg_ports(i, b) {
 		struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 		struct netmap_adapter *na = &vpna->up;
@@ -594,6 +598,7 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 			}
 		}
 	}
+	ENABLE_IRQ();
 	return 0;
 }
 
@@ -610,7 +615,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 		done = head;
 		return 0;
 	}
-	DISABLE_IRQ();
+	//DISABLE_IRQ();
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
 		RD(1, "failed to obtain rlock");
 		goto out;
@@ -621,7 +626,7 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	kring->nr_hwcur = done;
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
 out:
-	ENABLE_IRQ();
+	//ENABLE_IRQ();
 	return 0;
 }
 
@@ -1190,6 +1195,9 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 	if (onoff) {
 		struct netmap_bdg_ops ops
 			= {NULL, stackmap_bdg_config, stackmap_bdg_dtor};
+		if (na->active_fds > 0)
+			return 0;
+
 		if (stackmap_extra_alloc(na))
 			return err;
 		/* install config handler */
