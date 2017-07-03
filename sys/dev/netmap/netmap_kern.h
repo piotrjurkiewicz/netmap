@@ -1111,7 +1111,6 @@ struct stackmap_cb {
 	uint32_t flags;
 	uint32_t next;
 } __attribute__((__packed__)); /* 32 byte */
-
 static inline void
 stackmap_cb_set_state(struct stackmap_cb *scb, u_int newstate)
 {

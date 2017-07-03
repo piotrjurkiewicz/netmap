@@ -861,20 +861,25 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	u_int count = 0;
 	struct netmap_kring *kring = NULL;
 
-	/* OOO segment(s) might have been enqueued in the same rxsync round */
-	if (stackmap_no_runtocomp)
+	//if (stackmap_no_runtocomp)
 		spin_lock_irqsave(&queue->lock, cpu_flags);
+	/* OOO segment(s) might have been enqueued in the same rxsync round */
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 		struct netmap_slot *slot;
 		int queued = 0;
 
+		if (!stackmap_cb_valid(scb)) {
+			D("invalid scb %p (m %p len %u cpu %d)", scb, m, skb_headlen(m), smp_processor_id());
+			goto ignore;
+		}
 		if (unlikely(!kring)) {
 			kring = scb_kring(scb);
 			/* XXX this happens when stackmap goes away.
 			 * We need better workaround */
 			if (unlikely(!kring)) {
 				RD(1, "WARNING: no kring");
+ignore:
 				SET_MBUF_DESTRUCTOR(m, NULL);
 				nm_set_mbuf_data_destructor(m, &scb->ui, NULL);
 				sk_eat_skb(sk, m);
@@ -900,10 +905,10 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		} else
 #endif
 		sk_eat_skb(sk, m);
-		//D("ate %p state %x", m, stackmap_cb_get_state(scb));
+		ND("ate %p state %x", m, stackmap_cb_get_state(scb));
 		count++;
 	}
-	if (stackmap_no_runtocomp)
+	//if (stackmap_no_runtocomp)
 		spin_unlock_irqrestore(&queue->lock, cpu_flags);
 }
 

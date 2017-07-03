@@ -365,7 +365,6 @@ stackmap_kr_rxspace(struct netmap_kring *k)
 static void
 stackmap_bdg_flush(struct netmap_kring *kring)
 {
-	u_int lim_tx = kring->nkr_num_slots - 1;
 	struct netmap_adapter *na = kring->na;
 	struct netmap_vp_adapter *vpna =
 		(struct netmap_vp_adapter *)na;
@@ -449,6 +448,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			__builtin_prefetch(rs);
 			tmp.buf_idx = next;
 			scb = STACKMAP_CB_NMB(NMB(na, &tmp), bufsiz);
+			if (unlikely(!stackmap_cb_valid(scb))) {
+				panic("invalid scb");
+			}
 			next = scb->next;
 			ts = scb_slot(scb);
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
@@ -512,6 +514,9 @@ stackmap_bdg_preflush(struct netmap_kring *kring)
 	}
 	if (!(na == stackmap_master(na) || host))
 		rx = 1;
+	if (ft->npkts) {
+		stackmap_bdg_flush(kring);	
+	}
 	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
 		struct netmap_slot *slot = &kring->ring->slot[k];
 		struct stackmap_cb *scb;
@@ -584,7 +589,9 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 		return err;
 	if (stackmap_no_runtocomp)
 		return 0;
-	DISABLE_IRQ();
+
+	DISABLE_IRQ(); // emulate software interrupt context
+
 	for_bdg_ports(i, b) {
 		struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 		struct netmap_adapter *na = &vpna->up;
@@ -1100,7 +1107,6 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 	struct stackmap_sk_adapter *ska;
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
 	int on = 1;
-	struct netmap_kring *kring;
 	struct mbuf *m;
 
 	/* first check table size */
@@ -1130,15 +1136,31 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		RD(1, "WARNING: failed setsockopt(TCP_NODELAY)");
 	}
 
+	NM_SOCK_LOCK(sk); // kernel_setsockopt() above internally takes this lock
+	/* This validation under lock is needed to handle
+	 * simultaneous accept/config
+	 */
+	if (stackmap_sk(sk)) {
+		NM_SOCK_UNLOCK(sk);
+		nm_os_sock_fput(sk);
+		D("ska already allocated");
+		return EBUSY;
+	}
+	if (unlikely(sk->sk_data_ready == nm_os_stackmap_data_ready)) {
+		panic("nm_os_stackmap_data_ready set already");
+	}
+	if (unlikely(sk->sk_destruct == nm_os_stackmap_data_ready)) {
+		panic("stackmap_sk_destruct set already");
+	}
+
 	ska = nm_os_malloc(sizeof(*ska));
 	if (!ska) {
+		NM_SOCK_UNLOCK(sk);
 		nm_os_sock_fput(sk);
 		return ENOMEM;
 	}
-	if (sk->sk_data_ready != nm_os_stackmap_data_ready)
-		SAVE_DATA_READY(sk, ska);
-	if (sk->sk_destruct != stackmap_sk_destruct)
-		SAVE_DESTRUCTOR(sk, ska);
+	SAVE_DATA_READY(sk, ska);
+	SAVE_DESTRUCTOR(sk, ska);
 	ska->na = na;
 	ska->sk = sk;
 	ska->fd = fd;
@@ -1156,11 +1178,19 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 
 		if (stackmap_cb_valid(scb)) {
+			struct netmap_kring *kring, *dst_kring;
+			struct sk_buff_head *q = &sk->sk_receive_queue;
+
 			nm_os_stackmap_data_ready(sk);
-			kring = scb_kring(scb); // XXX assume same across the q
-			stackmap_bdg_flush(kring);
+			kring = scb_kring(scb);
+                        if (kring) {
+				dst_kring = NMR(na, NR_RX) +
+					    kring->ring_id % na->num_rx_rings;
+                        	dst_kring->nm_notify(dst_kring, 0);
+			}
 		}
 	}
+	NM_SOCK_UNLOCK(sk);
 	nm_os_sock_fput(sk);
 	return 0;
 }
@@ -1200,17 +1230,18 @@ stackmap_reg(struct netmap_adapter *na, int onoff)
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)na;
 	int err;
 
-	D("%s (%p) onoff %d suffix: %s",
-		na->name, sna, onoff,
-		sna->suffix[0] ? sna->suffix : "none");
+	D("%s (%p) onoff %d suffix: %s rings %d %d",
+		na->name, sna, onoff, sna->suffix[0] ? sna->suffix : "none",
+		na->num_tx_rings, na->num_rx_rings);
 	err = sna->save_reg(na, onoff);
 	if (err)
 		return err;
 	if (onoff) {
 		struct netmap_bdg_ops ops
 			= {NULL, stackmap_bdg_config, stackmap_bdg_dtor};
-		if (na->active_fds > 0)
+		if (na->active_fds > 0) {
 			return 0;
+		}
 
 		if (stackmap_extra_alloc(na))
 			return err;
