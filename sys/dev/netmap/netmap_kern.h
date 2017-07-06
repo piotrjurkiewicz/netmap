@@ -1613,7 +1613,8 @@ void netmap_monitor_stop(struct netmap_adapter *na);
 #ifdef WITH_STACK
 #define STACKMAP_DMA_OFFSET	2
 int stackmap_reg(struct netmap_adapter *, int);
-int netmap_get_stackmap_na(struct nmreq *nmr, struct netmap_adapter **ret, int create);
+int netmap_get_stackmap_na(struct nmreq *nmr,struct netmap_mem_d *nmd,
+			   struct netmap_adapter **ret, int create);
 #else /* !WITH_STACK */
 #define netmap_get_stackmap_na(_1, _2, _3)	0
 #endif /* !WITH_STACK */

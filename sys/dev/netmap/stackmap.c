@@ -1267,7 +1267,7 @@ stackmap_attach(struct netmap_adapter *arg, struct netmap_adapter **ret,
 }
 
 int
-netmap_get_stackmap_na(struct nmreq *nmr, struct netmap_adapter **ret,
+netmap_get_stackmap_na(struct nmreq *nmr, struct netmap_mem_d *nmd, struct netmap_adapter **ret,
 	       	int create)
 {
 	struct netmap_adapter *na;
@@ -1278,7 +1278,7 @@ netmap_get_stackmap_na(struct nmreq *nmr, struct netmap_adapter **ret,
 		return 0;
 
 	/* XXX always a new, private allocator */
-	error = netmap_get_bdg_na(nmr, &na, NULL, create);
+	error = netmap_get_bdg_na(nmr, &na, nmd, create);
 	if (error) {
 		D("error in get_bdg_na");
 		return error;

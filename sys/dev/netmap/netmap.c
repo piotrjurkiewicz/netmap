@@ -1496,7 +1496,7 @@ netmap_get_na(struct nmreq *nmr, struct netmap_adapter **na,
 		goto out;
 
 	/* try to see if this is a stackmap port */
-	error = netmap_get_stackmap_na(nmr, na, create);
+	error = netmap_get_stackmap_na(nmr, nmd, na, create);
 	if (error)
 	       return error;
 	if (*na != NULL) {
