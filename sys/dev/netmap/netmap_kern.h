@@ -443,7 +443,7 @@ struct netmap_kring {
 					 *  by ptnetmap host ports)
 					 */
 #define NKR_NOINTR      0x10            /* don't use interrupts on this ring */
-#define NKR_INSYNC	0x20
+#define NKR_NOXMIT	0x20
 
 	uint32_t	nr_mode;
 	uint32_t	nr_pending_mode;

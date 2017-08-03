@@ -74,7 +74,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_extra, CTLFLAG_RW, &stackmap_extra, 0
 SYSEND;
 
 static inline struct netmap_adapter *
-stackmap_master(const struct netmap_adapter *slave)
+stackmap_na(const struct netmap_adapter *slave)
 {
 	struct netmap_vp_adapter *vpna;
 
@@ -96,33 +96,24 @@ stackmap_is_host(struct netmap_adapter *na)
 static int
 stackmap_intr_notify(struct netmap_kring *kring, int flags)
 {
-	struct netmap_adapter *na, *vpna, *mna;
-	enum txrx t = NR_RX;
+	struct netmap_adapter *hwna = kring->na, *vpna, *mna;
+	enum txrx t = kring->tx ? NR_TX : NR_RX;
 
-	na = kring->na;
-	vpna = (struct netmap_adapter *)na->na_private;
+	vpna = (struct netmap_adapter *)hwna->na_private;
 	if (unlikely(!vpna))
 		return NM_IRQ_COMPLETED;
 
-	/* maybe TX */
-	if (kring >= NMR(na, NR_TX) &&
-	    kring <= NMR(na, NR_TX) + na->num_tx_rings) {
-		t = NR_TX;
-	}
-	if (unlikely(t == NR_TX))
-		ND("ignore TX interrupts");
-
 	/* just wakeup the client on the master */
-	mna = stackmap_master(vpna);
+	mna = stackmap_na(vpna);
 	if (likely(mna)) {
-		struct netmap_kring *mkring;
-		u_int me = kring - NMR(na, t), last;
+		u_int me = kring - NMR(hwna, t), last;
+		struct netmap_kring *mk;
 
 		if (stackmap_no_runtocomp)
 			return netmap_bwrap_intr_notify(kring, flags);
-		last = t == NR_RX ? mna->num_rx_rings : mna->num_tx_rings;
-		mkring = &NMR(mna, t)[last > me ? me : me % last];
-		mkring->nm_notify(mkring, 0);
+		last = nma_get_nrings(mna, t);
+		mk = &NMR(mna, t)[last > me ? me : me % last];
+		mk->nm_notify(mk, 0);
 	}
 	return NM_IRQ_COMPLETED;
 }
@@ -225,7 +216,8 @@ stackmap_extra_dequeue(struct netmap_kring *kring, struct netmap_slot *slot)
 		return;
 	} else if (!(likely((uintptr_t)slot >= (uintptr_t)slots) &&
 	      likely((uintptr_t)slot < (uintptr_t)(slots + pool->num)))) {
-		panic("invalid slot");
+		D("WARNING: invalid slot");
+		return;
 	}
 
 	extra = (struct stackmap_extra_slot *)slot;
@@ -396,18 +388,17 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	}
 	/* Now, we know how many packets go to the receiver */
 
-	if (!(na == stackmap_master(na) || host)) {
+	if (!(na == stackmap_na(na) || host)) {
 		rx = 1;
-		rxna = stackmap_master(na);
+		rxna = stackmap_na(na);
 	} else
 		rxna = &netmap_bdg_port(vpna->na_bdg, 1)->up; /* XXX */
 
-
-	if (unlikely(!nm_netmap_on(rxna))) {
-		panic("receiver na off");
-	}
-	dst_nr = kring - NMR(kring->na, NR_TX);
-	nrings = rxna->num_rx_rings;
+	//if (unlikely(!nm_netmap_on(rxna))) {
+	//	panic("receiver na off");
+	//}
+	dst_nr = kring - NMR(kring->na, NR_TX); // XXX cannot use ring_id...
+	nrings = nma_get_nrings(rxna, NR_RX);
 	if (dst_nr >= nrings)
 		dst_nr = dst_nr % nrings;
 	rxkring = NMR(rxna, NR_RX) + dst_nr;
@@ -453,9 +444,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 			__builtin_prefetch(rs);
 			tmp.buf_idx = next;
 			scb = STACKMAP_CB_NMB(NMB(na, &tmp), bufsiz);
-			if (unlikely(!stackmap_cb_valid(scb))) {
-				panic("invalid scb");
-			}
+			//if (unlikely(!stackmap_cb_valid(scb))) {
+			//	panic("invalid scb");
+			//}
 			next = scb->next;
 			ts = scb_slot(scb);
 			if (stackmap_cb_get_state(scb) == SCB_M_TXREF) {
@@ -514,14 +505,15 @@ stackmap_bdg_preflush(struct netmap_kring *kring)
 	struct stackmap_bdgfwd *ft = stackmap_get_bdg_fwd(kring);
 
 	if (netmap_bdg_rlock(vpna->na_bdg, na)) {
-		RD(1, "failed to obtain rlock (rx %d host %d)", rx, host);
+		/* this happens while register_fd */
+		ND(1, "failed to obtain rlock (rx %d host %d)", rx, host);
 		return k;
 	}
-	if (!(na == stackmap_master(na) || host))
+	if (!(na == stackmap_na(na) || host))
 		rx = 1;
-	if (ft->npkts) {
-		stackmap_bdg_flush(kring);	
-	}
+	//if (ft->npkts) {
+		//stackmap_bdg_flush(kring);	
+	//}
 	for (k = kring->nkr_hwlease; k != rhead; k = nm_next(k, lim_tx)) {
 		struct netmap_slot *slot = &kring->ring->slot[k];
 		struct stackmap_cb *scb;
@@ -585,7 +577,6 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 {
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)kring->na;
 	struct nm_bridge *b = sna->up.na_bdg;
-	u_int me = kring - NMR(kring->na, NR_RX);
 	int i, err;
 
 	/* TODO scan only necessary ports */
@@ -601,39 +592,54 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 		struct netmap_vp_adapter *vpna = netmap_bdg_port(b, i);
 		struct netmap_adapter *na = &vpna->up;
 		struct netmap_adapter *hwna;
-		struct netmap_kring *hwkring, *hostkring;
 		u_int first, stride, last, i;
 	
 		if (netmap_bdg_idx(vpna) == netmap_bdg_idx(&sna->up))
 			continue;
 		else if (stackmap_is_host(na))
 			continue;
-		if (unlikely(!nm_is_bwrap(na)))
-			panic("no bwrap attached");
 
 		/* We assume the same number of hwna with vpna
 		 * (see netmap_bwrap_attach()) */
 		hwna = ((struct netmap_bwrap_adapter *)vpna)->hwna;
 
 		/* hw ring(s) to scan */
-		first = kring->na->num_rx_rings > 1 ? me : 0;
+		first = kring->na->num_rx_rings > 1 ? kring->ring_id : 0;
 		stride = kring->na->num_rx_rings;
 		last = na->num_rx_rings;
-		hostkring = &NMR(hwna, NR_RX)[last];
 		for (i = first; i < last; i += stride) {
-			hwkring = &NMR(hwna, NR_RX)[i];
-			if (stackmap_host_batch)
-				hostkring->nr_kflags |= NKR_INSYNC;
-			netmap_bwrap_intr_notify(hwkring, 0);
-			if (stackmap_host_batch) {
-				/* flush packets sent by the host */
-				hostkring->nr_kflags &= ~NKR_INSYNC;
-				netmap_bwrap_intr_notify(hostkring, 0);
+			struct netmap_kring *hwk, *bk, *hk;
+		       
+			hwk = &NMR(hwna, NR_RX)[i];
+			bk = &NMR(na, NR_TX)[i];
+			hk = &NMR(hwna, NR_RX)[last];
+			if (hwna->na_flags & NAF_HOST_MQ)
+				hk += i;
+			/*
+			 * bdg_flush has been put off because we do not want
+			 * it to run in bdg_config context with bridge wlock
+			 * held. Thus, if we have some packets originated by
+			 * this NIC ring, just drain it without NIC's rxsync.
+			 */
+			if (stackmap_get_bdg_fwd(bk)->npkts > 0) {
+				if (netmap_bdg_rlock(b, na))
+					continue;
+				stackmap_bdg_flush(bk);
+				netmap_bdg_runlock(b);
+			} else {
+				if (stackmap_host_batch)
+					hk->nr_kflags |= NKR_NOXMIT;
+				netmap_bwrap_intr_notify(hwk, 0);
+				if (stackmap_host_batch) {
+					/* flush packets sent by the host */
+					hk->nr_kflags &= ~NKR_NOXMIT;
+					netmap_bwrap_intr_notify(hk, 0);
+				}
 			}
 		}
 	}
 	ENABLE_IRQ();
-	return 0;
+	return netmap_vp_rxsync(kring, flags);
 }
 
 
@@ -1077,15 +1083,16 @@ stackmap_unregister_socket(struct stackmap_sk_adapter *ska)
 	NM_SOCK_T *sk = ska->sk;
 	struct stackmap_adapter *sna = (struct stackmap_adapter *)ska->na;
 
-	if (ska->fd < sna->sk_adapters_max)
+	if (ska->fd >= sna->sk_adapters_max) {
+		D("WARNING: non-registered or invalid fd %d", ska->fd);
+	} else {
 		sna->sk_adapters[ska->fd] = NULL;
-	else
-		panic("unregistering non-registered fd %d", ska->fd);
-	NM_SOCK_LOCK(sk);
-	RESTORE_DATA_READY(sk, ska);
-	RESTORE_DESTRUCTOR(sk, ska);
-	stackmap_wsk(NULL, sk);
-	NM_SOCK_UNLOCK(sk);
+		NM_SOCK_LOCK(sk);
+		RESTORE_DATA_READY(sk, ska);
+		RESTORE_DESTRUCTOR(sk, ska);
+		stackmap_wsk(NULL, sk);
+		NM_SOCK_UNLOCK(sk);
+	}
 	nm_os_free(ska);
 }
 
@@ -1151,13 +1158,6 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 		D("ska already allocated");
 		return EBUSY;
 	}
-	if (unlikely(sk->sk_data_ready == nm_os_stackmap_data_ready)) {
-		panic("nm_os_stackmap_data_ready set already");
-	}
-	if (unlikely(sk->sk_destruct == nm_os_stackmap_data_ready)) {
-		panic("stackmap_sk_destruct set already");
-	}
-
 	ska = nm_os_malloc(sizeof(*ska));
 	if (!ska) {
 		NM_SOCK_UNLOCK(sk);
@@ -1184,13 +1184,13 @@ stackmap_register_fd(struct netmap_adapter *na, int fd)
 
 		if (stackmap_cb_valid(scb)) {
 			struct netmap_kring *kring, *dst_kring;
-			struct sk_buff_head *q = &sk->sk_receive_queue;
 
 			nm_os_stackmap_data_ready(sk);
 			kring = scb_kring(scb);
                         if (kring) {
 				dst_kring = NMR(na, NR_RX) +
 					    kring->ring_id % na->num_rx_rings;
+				/* See comment on stackmap_intr_notify() */
                         	dst_kring->nm_notify(dst_kring, 0);
 			}
 		}
@@ -1206,7 +1206,7 @@ stackmap_bdg_dtor(const struct netmap_vp_adapter *vpna)
 	struct stackmap_adapter *sna;
 	int i;
 
-	if (&vpna->up != stackmap_master(&vpna->up))
+	if (&vpna->up != stackmap_na(&vpna->up))
 		return;
 
 	sna = (struct stackmap_adapter *)vpna;

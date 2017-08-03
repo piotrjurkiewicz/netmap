@@ -3139,11 +3139,10 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	struct mbq *q;
 	int busy;
 	uint8_t *buf;
-	u_int n, i;
+	u_int i;
 
-	n = _nm_num_host_rings(na, NR_RX);
-	i = curcpu % n;
-	kring = &na->rx_rings[nma_get_nrings(na, NR_RX) + i];
+	i = curcpu % _nm_num_host_rings(na, NR_RX);
+	kring = &NMR(na, NR_RX)[nma_get_nrings(na, NR_RX) + i];
 
 	// XXX [Linux] we do not need this lock
 	// if we follow the down/configure/up protocol -gl
@@ -3210,7 +3209,7 @@ done:
 	if (m)
 		m_freem(m);
 	/* unconditionally wake up listeners */
-	if (!(kring->nr_kflags & NKR_INSYNC)) {
+	if (!(kring->nr_kflags & NKR_NOXMIT)) {
 		kring->nm_notify(kring, 0);
 	}
 	/* this is normally netmap_notify(), but for nics

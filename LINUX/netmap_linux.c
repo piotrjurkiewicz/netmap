@@ -868,11 +868,12 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 		struct stackmap_cb *scb = STACKMAP_CB(m);
 		struct netmap_slot *slot;
 		int queued = 0;
-
-		if (!stackmap_cb_valid(scb)) {
-			D("invalid scb %p (m %p len %u cpu %d)", scb, m, skb_headlen(m), smp_processor_id());
-			goto ignore;
-		}
+//
+//		if (unlikely(!stackmap_cb_valid(scb))) {
+//			D("invalid scb %p (m %p len %u cpu %d)",
+//				scb, m, skb_headlen(m), smp_processor_id());
+//			goto ignore;
+//		}
 		if (unlikely(!kring)) {
 			kring = scb_kring(scb);
 			/* XXX this happens when stackmap goes away.
@@ -951,8 +952,8 @@ nm_os_build_mbuf(struct netmap_kring *kring, char *buf, u_int len)
 	if (m) {
 		struct skb_shared_info *shinfo;
 
-		if (unlikely(!nm_os_mbuf_valid(kring->tx_pool[0])))
-			panic("invalid m0");
+		//if (unlikely(!nm_os_mbuf_valid(kring->tx_pool[0])))
+		//	panic("invalid m0");
 		*m = *kring->tx_pool[0];
 		m->head = m->data = buf;
 		skb_reset_tail_pointer(m);
@@ -1072,9 +1073,9 @@ nm_os_stackmap_send(struct netmap_kring *kring, struct netmap_slot *slot)
 	err = kernel_sendpage(sk->sk_socket, page, poff, len, MSG_DONTWAIT);
 	if (unlikely(err < 0)) {
 		/* XXX check if it is enough to assume EAGAIN only */
-		if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
-			panic("unexpected sendpage() error");
-		}
+		//if (unlikely(stackmap_cb_get_state(scb) != SCB_M_STACK)) {
+		//	panic("unexpected sendpage() error");
+		//}
 		ND(1, "error %d in sendpage() slot %ld",
 				err, slot - kring->ring->slot);
 		stackmap_cb_invalidate(scb);
