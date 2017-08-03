@@ -862,7 +862,7 @@ nm_os_stackmap_data_ready(NM_SOCK_T *sk)
 	struct netmap_kring *kring = NULL;
 
 	//if (stackmap_no_runtocomp)
-		spin_lock_irqsave(&queue->lock, cpu_flags);
+	//	spin_lock_irqsave(&queue->lock, cpu_flags);
 	/* OOO segment(s) might have been enqueued in the same rxsync round */
 	skb_queue_walk_safe(queue, m, tmp) {
 		struct stackmap_cb *scb = STACKMAP_CB(m);
@@ -909,7 +909,7 @@ ignore:
 		count++;
 	}
 	//if (stackmap_no_runtocomp)
-		spin_unlock_irqrestore(&queue->lock, cpu_flags);
+	//	spin_unlock_irqrestore(&queue->lock, cpu_flags);
 }
 
 NM_SOCK_T *

@@ -208,15 +208,20 @@ stackmap_extra_dequeue(struct netmap_kring *kring, struct netmap_slot *slot)
 {
 	struct netmap_ring *ring = kring->ring;
 	struct extra_pool *pool = kring->extra;
-	struct stackmap_extra_slot *slots = pool->slots, *extra;
+	struct stackmap_extra_slot *slots, *extra;
 	u_int pos;
 
-	/* nothing to do if I am on the ring */
-	if ((uintptr_t)slot >= (uintptr_t)ring->slot &&
-	    (uintptr_t)slot < (uintptr_t)(ring->slot + kring->nkr_num_slots)) {
+	if (unlikely(!pool)) {
+		RD(1, "kring->extra has gone");
 		return;
 	} else if (unlikely(!pool->num)) {
 		RD(1, "extra slots have gone");
+		return;
+	}
+	slots = pool->slots;
+	/* nothing to do if I am on the ring */
+	if ((uintptr_t)slot >= (uintptr_t)ring->slot &&
+	    (uintptr_t)slot < (uintptr_t)(ring->slot + kring->nkr_num_slots)) {
 		return;
 	} else if (!(likely((uintptr_t)slot >= (uintptr_t)slots) &&
 	      likely((uintptr_t)slot < (uintptr_t)(slots + pool->num)))) {
