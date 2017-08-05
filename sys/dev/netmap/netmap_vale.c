@@ -2794,15 +2794,14 @@ netmap_bwrap_attach(const char *nr_name, struct netmap_adapter *hwna)
 	hwna->na_vp = &bna->up;
 
 	if (hwna->na_flags & NAF_HOST_RINGS) {
-		D("mp_maxid %d", mp_maxid);
-		/* Enable HOST_MQ only if lock-less mbq access against
-		 * transmit() and rxsync_from_host() is possible.
-		 * Note that the number of NIC queues and active CPU
-		 * count can differ
+		int nrings = 1;
+		/* HOST_MQ always creates host rings with the same number 
+		 * with CPU cores regardless of NIC rings
 		 */
-		if (netmap_host_mq && mp_maxid < hwna->num_rx_rings) {
+		if (netmap_host_mq) {
 			na->na_flags |= NAF_HOST_MQ;
 			hwna->na_flags |= NAF_HOST_MQ;
+			nrings = mp_maxid + 1;
 		}
 		if (hwna->na_flags & NAF_SW_ONLY)
 			na->na_flags |= NAF_SW_ONLY;
@@ -2812,9 +2811,7 @@ netmap_bwrap_attach(const char *nr_name, struct netmap_adapter *hwna)
 		hostna->ifp = hwna->ifp;
 		for_rx_tx(t) {
 			enum txrx r = nm_txrx_swap(t);
-			nma_set_nrings(hostna, t,
-				hwna->na_flags & NAF_HOST_MQ ?
-				nma_get_nrings(hwna, r) : 1);
+			nma_set_nrings(hostna, t, nrings);
 			nma_set_ndesc(hostna, t, nma_get_ndesc(hwna, r));
 		}
 		// hostna->nm_txsync = netmap_bwrap_host_txsync;
