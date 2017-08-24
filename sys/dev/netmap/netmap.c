@@ -2325,6 +2325,7 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 			NMG_UNLOCK();
 			break;
 		} else if (i == NETMAP_POOLS_CREATE) {
+			D("POOLS_CREATE (nr_arg4 %u)", nmr->nr_arg4);
 			nmd = netmap_mem_ext_create(nmr, &error);
 			if (nmd == NULL)
 				break;
@@ -2400,13 +2401,16 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 					&na->si[t] : &NMR(na, t)[priv->np_qfirst[t]].si;
 			}
 
-			if (nmr->nr_arg3) {
+			if (nmr->nr_arg3 || nmr->nr_arg4) {
+				u_int *p = nmr->nr_arg3 ? &nmr->nr_arg3
+							: &nmr->nr_arg4;
+
 				if (netmap_verbose)
-					D("requested %d extra buffers", nmr->nr_arg3);
-				nmr->nr_arg3 = netmap_extra_alloc(na,
-					&nifp->ni_bufs_head, nmr->nr_arg3, 0);
+					D("requested %d extra buffers", *p);
+				*p = netmap_extra_alloc(na,
+					&nifp->ni_bufs_head, *p, 0);
 				if (netmap_verbose)
-					D("got %d extra buffers", nmr->nr_arg3);
+					D("got %d extra buffers", *p);
 			}
 			nmr->nr_offset = netmap_mem_if_offset(na->nm_mem, nifp);
 

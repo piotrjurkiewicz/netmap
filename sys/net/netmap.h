@@ -545,6 +545,7 @@ struct nmreq {
 	uint32_t	nr_flags;
 	/* various modes, extends nr_ringid */
 	uint32_t	spare2[1];
+#define nr_arg4		spare2[0]
 	char		nr_suffix[NETMAP_SUFFIX_LEN];
 };
 
