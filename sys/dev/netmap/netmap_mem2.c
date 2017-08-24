@@ -2013,7 +2013,7 @@ netmap_mem_ext_delete(struct netmap_mem_d *d)
 			kunmap(e->pages[i]);
 			put_page(e->pages[i]);
 		}
-		nm_os_free(e->pages);
+		nm_os_vfree(e->pages);
 		e->pages = NULL;
 		e->nr_pages = 0;
 	}
@@ -2080,7 +2080,7 @@ netmap_mem_ext_create(struct nmreq *nmr, int *perror)
 	start = p >> PAGE_SHIFT;
 	nr_pages = end - start;
 
-	pages = nm_os_malloc(nr_pages * sizeof(*pages));
+	pages = nm_os_vmalloc(nr_pages * sizeof(*pages));
 	if (pages == NULL) {
 		error = ENOMEM;
 		goto out;
