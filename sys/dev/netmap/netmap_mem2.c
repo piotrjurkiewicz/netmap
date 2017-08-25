@@ -132,7 +132,7 @@ struct netmap_obj_pool {
 
 struct netmap_mem_ops {
 	int (*nmd_get_lut)(struct netmap_mem_d *, struct netmap_lut*);
-	int  (*nmd_get_info)(struct netmap_mem_d *, u_int *size,
+	int  (*nmd_get_info)(struct netmap_mem_d *, size_t *size,
 			u_int *memflags, uint16_t *id);
 
 	vm_paddr_t (*nmd_ofstophys)(struct netmap_mem_d *, vm_ooffset_t);
@@ -219,7 +219,7 @@ netmap_mem_##name(struct netmap_adapter *na, t1 a1) \
 }
 
 NMD_DEFCB1(int, get_lut, struct netmap_lut *);
-NMD_DEFCB3(int, get_info, u_int *, u_int *, uint16_t *);
+NMD_DEFCB3(int, get_info, size_t *, u_int *, uint16_t *);
 NMD_DEFCB1(vm_paddr_t, ofstophys, vm_ooffset_t);
 static int netmap_mem_config(struct netmap_mem_d *);
 NMD_DEFCB(int, config);
@@ -716,7 +716,8 @@ PMDL
 win32_build_user_vm_map(struct netmap_mem_d* nmd)
 {
 	int i, j;
-	u_int memsize, memflags, ofs = 0;
+	size_t memsize;
+	u_int memflags, ofs = 0;
 	PMDL mainMdl, tempMdl;
 
 	if (netmap_mem_get_info(nmd, &memsize, &memflags, NULL)) {
@@ -786,7 +787,7 @@ netmap_mem2_get_pool_info(struct netmap_mem_d* nmd, u_int pool, u_int *clustsize
 }
 
 static int
-netmap_mem2_get_info(struct netmap_mem_d* nmd, u_int* size, u_int *memflags,
+netmap_mem2_get_info(struct netmap_mem_d* nmd, size_t* size, u_int *memflags,
 	nm_memid_t *id)
 {
 	int error = 0;
@@ -1951,7 +1952,7 @@ netmap_mem_pools_info_get(struct nmreq *nmr, struct netmap_mem_d *nmd)
 	uintptr_t *pp = (uintptr_t *)&nmr->nr_arg1;
 	struct netmap_pools_info *upi = (struct netmap_pools_info *)(*pp);
 	struct netmap_pools_info pi;
-	unsigned int memsize;
+	size_t memsize;
 	uint16_t memid;
 	int ret;
 
@@ -2356,7 +2357,7 @@ netmap_mem_pt_guest_get_lut(struct netmap_mem_d *nmd, struct netmap_lut *lut)
 }
 
 static int
-netmap_mem_pt_guest_get_info(struct netmap_mem_d *nmd, u_int *size,
+netmap_mem_pt_guest_get_info(struct netmap_mem_d *nmd, size_t *size,
 			     u_int *memflags, uint16_t *id)
 {
 	int error = 0;

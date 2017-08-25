@@ -223,7 +223,7 @@ struct nm_desc {
 	struct nm_desc *self; /* point to self if netmap. */
 	int fd;
 	void *mem;
-	uint32_t memsize;
+	uint64_t memsize;
 	int done_mmap;	/* set if mem is the result of mmap */
 	struct netmap_if * const nifp;
 	uint16_t first_tx_ring, last_tx_ring, cur_tx_ring;
