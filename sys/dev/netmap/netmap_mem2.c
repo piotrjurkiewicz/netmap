@@ -132,7 +132,7 @@ struct netmap_obj_pool {
 
 struct netmap_mem_ops {
 	int (*nmd_get_lut)(struct netmap_mem_d *, struct netmap_lut*);
-	int  (*nmd_get_info)(struct netmap_mem_d *, size_t *size,
+	int  (*nmd_get_info)(struct netmap_mem_d *, uint64_t *size,
 			u_int *memflags, uint16_t *id);
 
 	vm_paddr_t (*nmd_ofstophys)(struct netmap_mem_d *, vm_ooffset_t);
@@ -219,7 +219,7 @@ netmap_mem_##name(struct netmap_adapter *na, t1 a1) \
 }
 
 NMD_DEFCB1(int, get_lut, struct netmap_lut *);
-NMD_DEFCB3(int, get_info, size_t *, u_int *, uint16_t *);
+NMD_DEFCB3(int, get_info, uint64_t *, u_int *, uint16_t *);
 NMD_DEFCB1(vm_paddr_t, ofstophys, vm_ooffset_t);
 static int netmap_mem_config(struct netmap_mem_d *);
 NMD_DEFCB(int, config);
@@ -787,7 +787,7 @@ netmap_mem2_get_pool_info(struct netmap_mem_d* nmd, u_int pool, u_int *clustsize
 }
 
 static int
-netmap_mem2_get_info(struct netmap_mem_d* nmd, size_t* size, u_int *memflags,
+netmap_mem2_get_info(struct netmap_mem_d* nmd, uint64_t* size, u_int *memflags,
 	nm_memid_t *id)
 {
 	int error = 0;

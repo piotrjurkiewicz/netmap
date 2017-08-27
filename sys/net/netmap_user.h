@@ -113,7 +113,7 @@
 	nifp, (nifp)->ring_ofs[index + (nifp)->ni_tx_rings + 1] )
 
 #define NETMAP_BUF(ring, index)				\
-	((char *)(ring) + (ring)->buf_ofs + ((index)*(ring)->nr_buf_size))
+	((char *)(ring) + (ring)->buf_ofs + ((long)(index)*(ring)->nr_buf_size))
 
 #define NETMAP_BUF_IDX(ring, buf)			\
 	( ((char *)(buf) - ((char *)(ring) + (ring)->buf_ofs) ) / \
