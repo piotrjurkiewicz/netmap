@@ -1533,6 +1533,7 @@ _netmap_mem_private_new(size_t size, struct netmap_obj_params *p,
 				d->name);
 		d->params[i].num = p[i].num;
 		d->params[i].size = p[i].size;
+		D("num %u", p[i].num);
 	}
 
 	NMA_LOCK_INIT(d);
