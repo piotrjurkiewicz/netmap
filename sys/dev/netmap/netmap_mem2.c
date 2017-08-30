@@ -1953,7 +1953,7 @@ netmap_mem_pools_info_get(struct nmreq *nmr, struct netmap_mem_d *nmd)
 	uintptr_t *pp = (uintptr_t *)&nmr->nr_arg1;
 	struct netmap_pools_info *upi = (struct netmap_pools_info *)(*pp);
 	struct netmap_pools_info pi;
-	size_t memsize;
+	uint64_t memsize;
 	uint16_t memid;
 	int ret;
 
