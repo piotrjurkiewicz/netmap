@@ -521,7 +521,7 @@ struct nmreq {
 
 #define NETMAP_DO_RX_POLL	0x8000	/* DO automatic rxsync on poll */
 
-	uint16_t	nr_cmd;
+	uint8_t	nr_cmd;
 #define NETMAP_BDG_ATTACH	1	/* attach the NIC */
 #define NETMAP_BDG_DETACH	2	/* detach the NIC */
 #define NETMAP_BDG_REGOPS	3	/* register bridge callbacks */
@@ -535,8 +535,9 @@ struct nmreq {
 #define NETMAP_BDG_POLLING_ON	10	/* delete polling kthread */
 #define NETMAP_BDG_POLLING_OFF	11	/* delete polling kthread */
 #define NETMAP_VNET_HDR_GET	12      /* get the port virtio-net-hdr length */
-#define NETMAP_POOLS_INFO_GET	13	/* get memory allocator pools info */
-#define NETMAP_POOLS_CREATE	14	/* create a new memory allocator */
+	uint8_t nr_cmd2;
+#define NETMAP_POOLS_INFO_GET	1	/* get memory allocator pools info */
+#define NETMAP_POOLS_CREATE	2	/* create a new memory allocator */
 	uint16_t	nr_arg1;	/* reserve extra rings in NIOCREGIF */
 #define NETMAP_BDG_HOST		1	/* attach the host stack on ATTACH */
 

@@ -905,7 +905,7 @@ nm_bdg_ctl_attach(struct nmreq *nmr, int locked)
 			D("failed in this callback");
 			goto unref_exit;
 		}
-		D("registered %s to netmap-mode", na->name);
+		D("registered %s to netmap-mode nmd %p", na->name, na->nm_mem);
 	}
 	if (!locked)
 		NMG_UNLOCK();

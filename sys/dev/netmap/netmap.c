@@ -2287,6 +2287,33 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 		 * a regif operation, but a different one, specified by the
 		 * value of nmr->nr_cmd.
 		 */
+	       	if (nmr->nr_cmd2 == NETMAP_POOLS_INFO_GET) {
+			/* get information from the memory allocator */
+			NMG_LOCK();
+			if (priv->np_na && priv->np_na->nm_mem) {
+				struct netmap_mem_d *nmd = priv->np_na->nm_mem;
+				error = netmap_mem_pools_info_get(nmr, nmd);
+			} else {
+				error = EINVAL;
+			}
+			NMG_UNLOCK();
+			nmr->nr_cmd2 =0;
+			break;
+		} else if (nmr->nr_cmd2 == NETMAP_POOLS_CREATE) {
+			D("POOLS_CREATE (nr_arg4 %u)", nmr->nr_arg4);
+			nmd = netmap_mem_ext_create(nmr, &error);
+			if (nmd == NULL)
+				break;
+			/* reset the fields used by POOLS_CREATE to
+			 * avoid confusing the rest of the code
+			 */
+			nmr->nr_cmd2 = 0;
+			nmr->nr_arg1 = 0;
+			nmr->nr_arg2 = 0;
+			nmr->nr_arg3 = 0;
+			D("created ext mem %p", nmd);
+		}
+
 		i = nmr->nr_cmd;
 		if (i == NETMAP_BDG_ATTACH || i == NETMAP_BDG_DETACH
 				|| i == NETMAP_BDG_VNET_HDR
@@ -2295,6 +2322,10 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 				|| i == NETMAP_BDG_POLLING_ON
 				|| i == NETMAP_BDG_POLLING_OFF) {
 			/* possibly attach/detach NIC and VALE switch */
+			if (nmd) {
+				nmr->nr_arg2 = netmap_mem_get_id(nmd);
+				D("mem_id %u", nmr->nr_arg2);
+			}
 			error = netmap_bdg_ctl(nmr, NULL, 0);
 			break;
 		} else if (i == NETMAP_PT_HOST_CREATE || i == NETMAP_PT_HOST_DELETE) {
@@ -2313,29 +2344,6 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 			netmap_unget_na(na, ifp);
 			NMG_UNLOCK();
 			break;
-		} else if (i == NETMAP_POOLS_INFO_GET) {
-			/* get information from the memory allocator */
-			NMG_LOCK();
-			if (priv->np_na && priv->np_na->nm_mem) {
-				struct netmap_mem_d *nmd = priv->np_na->nm_mem;
-				error = netmap_mem_pools_info_get(nmr, nmd);
-			} else {
-				error = EINVAL;
-			}
-			NMG_UNLOCK();
-			break;
-		} else if (i == NETMAP_POOLS_CREATE) {
-			D("POOLS_CREATE (nr_arg4 %u)", nmr->nr_arg4);
-			nmd = netmap_mem_ext_create(nmr, &error);
-			if (nmd == NULL)
-				break;
-			/* reset the fields used by POOLS_CREATE to
-			 * avoid confusing the rest of the code
-			 */
-			nmr->nr_cmd = 0;
-			nmr->nr_arg1 = 0;
-			nmr->nr_arg2 = 0;
-			nmr->nr_arg3 = 0;
 		} else if (i != 0) {
 			D("nr_cmd must be 0 not %d", i);
 			error = EINVAL;
