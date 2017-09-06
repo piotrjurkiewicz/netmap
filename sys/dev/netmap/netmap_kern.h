@@ -539,7 +539,7 @@ struct netmap_kring {
 #endif /* WITH_STACK */
 
 #ifdef FTMB
-	struct nm_ftmb_logger *ftmb;
+	struct nm_ftmb *ftmb;
 #endif /* FTMB */
 #ifdef WITH_MONITOR
 	/* array of krings that are monitoring this kring */
