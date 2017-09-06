@@ -2311,7 +2311,6 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 			nmr->nr_arg1 = 0;
 			nmr->nr_arg2 = 0;
 			nmr->nr_arg3 = 0;
-			D("created ext mem %p", nmd);
 		}
 
 		i = nmr->nr_cmd;
@@ -2324,7 +2323,6 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 			/* possibly attach/detach NIC and VALE switch */
 			if (nmd) {
 				nmr->nr_arg2 = netmap_mem_get_id(nmd);
-				D("mem_id %u", nmr->nr_arg2);
 			}
 			error = netmap_bdg_ctl(nmr, NULL, 0);
 			break;
