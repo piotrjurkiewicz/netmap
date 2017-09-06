@@ -129,9 +129,14 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
  * last packet in the block may overflow the size.
  */
 static int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
+enum {NM_FTMB_COPY = 1, NM_FTMB_ZEROCOPY};
+static int bridge_ftmb = NM_FTMB_COPY;
+static int bridge_ftmb_extra = 100000; // per ring
 SYSBEGIN(vars_vale);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_ftmb, CTLFLAG_RW, &bridge_ftmb, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_ftmb_extra, CTLFLAG_RW, &bridge_ftmb_extra, 0 , "");
 SYSEND;
 
 static int netmap_vp_create(struct nmreq *, struct ifnet *,
@@ -1492,6 +1497,56 @@ static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_vp_adapter *na, u_int ring_nr);
 
+#ifdef FTMB
+struct nm_ftmb_logger {
+	struct netmap_slot *slot;
+	u_int cur;
+	u_int max;
+};
+
+static inline int
+ftmb_extra_next(struct netmap_kring *kring)
+{
+	struct nm_ftmb_logger *ftmb = kring->ftmb;
+	u_int ret = ftmb->cur;
+
+	ftmb->cur = ret == ftmb->max ? 0 : ftmb->cur + 1;
+	return ret;
+}
+
+#if 0
+static inline void
+nm_ftmb_input_logger(struct netmap_kring *kring, struct netmap_slot *slot,
+		char *buf, int copy)
+{
+	struct nm_ftmd_logger *flogger;
+	struct nm_ftmd_pktlog *pl = flogger->pktlogs[flogger->pktlog_cur++];
+
+	if (flogger->pktlog_cur == flogger->pktlog_max) {
+		flogger->pktlog_cur = 0;
+	}
+	if (copy) {
+		struct netmap_adapter *na = kring->na;
+		struct netmap_slot *extra;
+		u_int pos, i;
+		char *dst;
+
+		/* take an extra buffer */
+		pos = ftmb_extra_next(kring);
+		extra = kring->ftmb_extra + pos;
+		dst = NMB(na, extra);
+
+		nm_pkt_copy(buf, dst, slot->len);
+		buf = dst;
+	}
+	for (i = 0; i < slot->len; i += 64) {
+		clflush(buf + i);
+	}
+	*pl =(uint64_t)slot->buf_idx << 32 | slot->offset << 16 | slot->len;
+}
+#endif /* 0 */
+
+#endif /* FTMB */
 
 /*
  * main dispatch routine for the bridge.
@@ -1529,6 +1584,9 @@ nm_bdg_preflush(struct netmap_kring *kring, u_int end)
 		struct netmap_slot *slot = &ring->slot[j];
 		char *buf;
 
+#ifdef FTMB
+	//	nm_ftmb_input_logger(kring, slot, bridge_ftmb == NM_FTMB_ZEROCOPY);
+#endif /* FTMB */
 		ft[ft_i].ft_len = slot->len;
 		ft[ft_i].ft_flags = slot->flags;
 
@@ -2121,6 +2179,23 @@ netmap_vp_txsync(struct netmap_kring *kring, int flags)
 		bridge_batch = NM_BDG_BATCH;
 
 	done = nm_bdg_preflush(kring, head);
+#ifdef FTMB
+#if 0
+	if (netmap_bdg_ftmb == NM_FTMB_ZEROCOPY) {
+		for (i = head; likely(i !=done); i = nm_next(i, lim)) {
+			u_int pos = ftmd_extra_next(kring);
+			struct netmap_slot *slot = &kring->ring->slot[i];
+			struct netmap_slot *extra = &kring->ftmd_extra[pos];
+			struct netmap_slot tmp;
+
+			tmp = *slot;
+			*slot = *extra;
+			slot->flags |= NS_BUF_CHANGED;
+			*extra = tmp;
+		}
+	}
+#endif /* 0 */
+#endif /* FTMB */
 done:
 	if (done != head)
 		D("early break at %d/ %d, tail %d", done, head, kring->nr_hwtail);
@@ -2133,7 +2208,6 @@ done:
 		D("%s ring %d flags %d", na->up.name, kring->ring_id, flags);
 	return 0;
 }
-
 
 /* rxsync code used by VALE ports nm_rxsync callback and also
  * internally by the brwap
@@ -2441,6 +2515,76 @@ put_out:
 	return error ? error : ret;
 }
 
+#ifdef FTMB
+static void
+nm_ftmb_extra_free(struct netmap_adapter *na)
+{
+	enum txrx t;
+
+	for_rx_tx(t) {
+		int i;
+
+		for (i = 0; i < netmap_real_rings(na, t); i++) {
+			struct netmap_kring *kring = &NMR(na, t)[i];
+			struct nm_ftmb_logger *ftmb = kring->ftmb;
+
+			if (!ftmb)
+				continue;
+			if (ftmb->slot)
+				nm_os_free(ftmb->slot);
+			nm_os_free(ftmb);
+		}
+	}
+}
+
+static int
+nm_ftmb_extra_alloc(struct netmap_adapter *na)
+{
+	enum txrx t;
+	int nr = netmap_real_rings(na, NR_TX) + netmap_real_rings(na, NR_RX);
+	int num = bridge_ftmb_extra / nr;
+
+	for_rx_tx(t) {
+		int i;
+
+		for (i =0; i < netmap_real_rings(na, t); i++) {
+			struct netmap_kring *kring = &NMR(na, t)[i];
+			struct nm_ftmb_logger *pool;
+			struct netmap_slot *slot;
+			uint32_t next;
+			u_int n;
+
+			pool = nm_os_malloc(sizeof(*pool));
+			if (!pool)
+				break;
+			kring->extra = (void *)pool;
+			slot = nm_os_malloc(sizeof(*slot) * num);
+			if (!slot)
+				break;
+			pool->slot = slot;
+			n = netmap_extra_alloc(na, &next, num, 0);
+			if (n < num) {
+				D("allocated only %u bufs", n);
+			}
+			pool->max = n;
+			pool->cur = 0;
+
+			for (; next; slot++) {
+				slot->buf_idx = next;
+				next = *(uint32_t *)NMB(na, slot);
+			}
+			D("initialized %u bufs", pool->max);
+		}
+		/* rollback on error */
+		if (i < netmap_real_rings(na, t)) {
+			nm_ftmb_extra_free(na);
+			return ENOMEM;
+		}
+	}
+	return 0;
+}
+#endif /* FTMB */
+
 /* nm_register callback for bwrap */
 int
 netmap_bwrap_reg(struct netmap_adapter *na, int onoff)
@@ -2455,6 +2599,11 @@ netmap_bwrap_reg(struct netmap_adapter *na, int onoff)
 	ND("%s %s", na->name, onoff ? "on" : "off");
 
 	if (onoff) {
+#ifdef FTMB
+		if (nm_ftmb_extra_alloc(na)) {
+			return ENOMEM;
+		}
+#endif /* FTMB */
 		/* netmap_do_regif has been called on the bwrap na.
 		 * We need to pass the information about the
 		 * memory allocator down to the hwna before

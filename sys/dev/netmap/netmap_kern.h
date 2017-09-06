@@ -35,6 +35,8 @@
 #ifndef _NET_NETMAP_KERN_H_
 #define _NET_NETMAP_KERN_H_
 
+#define FTMB	1
+
 #if defined(linux)
 
 #if defined(CONFIG_NETMAP_EXTMEM)
@@ -536,6 +538,9 @@ struct netmap_kring {
 	uint32_t	nkr_ft_cur; /* used in stackmap */
 #endif /* WITH_STACK */
 
+#ifdef FTMB
+	struct nm_ftmb_logger *ftmb;
+#endif /* FTMB */
 #ifdef WITH_MONITOR
 	/* array of krings that are monitoring this kring */
 	struct netmap_kring **monitors;
