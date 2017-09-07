@@ -132,6 +132,7 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config, int nr_arg2,
 	nmr.nr_cmd = nr_cmd;
 	parse_nmr_config(nmr_config, &nmr);
 	nmr.nr_arg2 = nr_arg2;
+	nmr.nr_arg3 = extra_bufs;
 #ifdef WITH_EXTMEM
 	if (memname[0] != '\0') {
 		mfd = open(memname, O_RDWR|O_CREAT, S_IRWXU);
@@ -162,8 +163,16 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config, int nr_arg2,
 #endif
 
 	switch (nr_cmd) {
-	case NETMAP_BDG_DELIF:
 	case NETMAP_BDG_NEWIF:
+#ifdef WITH_EXTMEM
+		if (memname[0] != '\0') {
+			nmr.nr_cmd2 = NETMAP_POOLS_CREATE;
+			if (extra_bufs)
+				nmr.nr_arg4 = nmr.nr_arg3;
+			memcpy((void *)&nmr.nr_arg1, &m, sizeof(void *));
+		}
+#endif /* WITH_EXTMEM */
+	case NETMAP_BDG_DELIF:
 		error = ioctl(fd, NIOCREGIF, &nmr);
 		if (error == -1) {
 			ND("Unable to %s %s", nr_cmd == NETMAP_BDG_DELIF ? "delete":"create", name);
