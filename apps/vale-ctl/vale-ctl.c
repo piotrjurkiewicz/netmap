@@ -134,7 +134,7 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config, int nr_arg2,
 	nmr.nr_arg2 = nr_arg2;
 	nmr.nr_arg3 = extra_bufs;
 #ifdef WITH_EXTMEM
-	if (memname[0] != '\0') {
+	if (strlen(memname) > 0) {
 		mfd = open(memname, O_RDWR|O_CREAT, S_IRWXU);
 		if (mfd < 0) {
 			perror("open");
@@ -164,15 +164,15 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config, int nr_arg2,
 
 	switch (nr_cmd) {
 	case NETMAP_BDG_NEWIF:
+	case NETMAP_BDG_DELIF:
 #ifdef WITH_EXTMEM
-		if (memname[0] != '\0') {
+		if (nr_cmd == NETMAP_BDG_NEWIF && strlen(memname) > 0) {
 			nmr.nr_cmd2 = NETMAP_POOLS_CREATE;
 			if (extra_bufs)
 				nmr.nr_arg4 = nmr.nr_arg3;
 			memcpy((void *)&nmr.nr_arg1, &m, sizeof(void *));
 		}
 #endif /* WITH_EXTMEM */
-	case NETMAP_BDG_DELIF:
 		error = ioctl(fd, NIOCREGIF, &nmr);
 		if (error == -1) {
 			ND("Unable to %s %s", nr_cmd == NETMAP_BDG_DELIF ? "delete":"create", name);
@@ -193,7 +193,7 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config, int nr_arg2,
 			nmr.nr_arg3 = extra_bufs;
 		}
 #ifdef WITH_EXTMEM
-		if (memname[0] != '\0') {
+		if (strlen(memname) > 0) {
 			nmr.nr_cmd2 = NETMAP_POOLS_CREATE;
 			if (extra_bufs)
 				nmr.nr_arg4 = nmr.nr_arg3;
