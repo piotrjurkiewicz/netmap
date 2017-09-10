@@ -878,7 +878,7 @@ nm_open(const char *ifname, const struct nmreq *req,
 
 	if (req) {
 		d->req = *req;
-		if (d->req.nr_cmd == NETMAP_POOLS_CREATE) {
+		if (d->req.nr_cmd2 == NETMAP_POOLS_CREATE) {
 			if (IS_NETMAP_DESC(parent) &&
 					(new_flags & (NM_OPEN_ARG1 | NM_OPEN_ARG2 | NM_OPEN_ARG3))) {
 				snprintf(errmsg, MAXERRMSG, "POOLS_CREATE is incompatibile with NM_OPEN_ARG? flags");

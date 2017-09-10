@@ -538,9 +538,7 @@ struct netmap_kring {
 	uint32_t	nkr_ft_cur; /* used in stackmap */
 #endif /* WITH_STACK */
 
-#ifdef FTMB
-	struct nm_ftmb *ftmb;
-#endif /* FTMB */
+	struct nm_ft_log *ftlog;
 #ifdef WITH_MONITOR
 	/* array of krings that are monitoring this kring */
 	struct netmap_kring **monitors;
@@ -2106,6 +2104,8 @@ struct nm_bdg_fwd {	/* forwarding entry for a bridge */
 	uint8_t ft_frags;	/* how many fragments (only on 1st frag) */
 	uint8_t _ft_port;	/* dst port (unused) */
 	uint16_t ft_flags;	/* flags, e.g. indirect */
+#define FT_SLOT	0x0080
+#define FT_LOG	0x0100
 	uint16_t ft_len;	/* src fragment len */
 	uint16_t ft_next;	/* next packet to same destination */
 };

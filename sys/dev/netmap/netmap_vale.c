@@ -129,14 +129,12 @@ __FBSDID("$FreeBSD: head/sys/dev/netmap/netmap.c 257176 2013-10-26 17:58:36Z gle
  * last packet in the block may overflow the size.
  */
 static int bridge_batch = NM_BDG_BATCH; /* bridge batch size */
-enum {NM_FTMB_COPY = 1, NM_FTMB_ZEROCOPY};
-static int bridge_ftmb = NM_FTMB_COPY;
-static int bridge_ftmb_extra = 800000; // per ring
+enum {NM_FT_NONE = 0, NM_FT_COPY, NM_FT_ZEROCOPY};
+static int bridge_ft_slot = NM_FT_NONE;
 SYSBEGIN(vars_vale);
 SYSCTL_DECL(_dev_netmap);
 SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_batch, CTLFLAG_RW, &bridge_batch, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_ftmb, CTLFLAG_RW, &bridge_ftmb, 0 , "");
-SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_ftmb_extra, CTLFLAG_RW, &bridge_ftmb_extra, 0 , "");
+SYSCTL_INT(_dev_netmap, OID_AUTO, bridge_ft_slot, CTLFLAG_RW, &bridge_ft_slot, 0 , "");
 SYSEND;
 
 static int netmap_vp_create(struct nmreq *, struct ifnet *,
@@ -1496,8 +1494,7 @@ static int
 nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n,
 	struct netmap_vp_adapter *na, u_int ring_nr);
 
-#ifdef FTMB
-struct nm_ftmb {
+struct nm_ft_log {
 	uint32_t cur;
 	uint32_t num;
 	uint64_t *plog;
@@ -1505,25 +1502,25 @@ struct nm_ftmb {
 };
 
 static inline int
-ftmb_next(struct netmap_kring *kring)
+ft_log_next(struct netmap_kring *kring)
 {
-	struct nm_ftmb *ftmb = kring->ftmb;
-	u_int ret = ftmb->cur;
+	struct nm_ft_log *ftlog = kring->ftlog;
+	u_int ret = ftlog->cur;
 
-	ftmb->cur++;
-       	if (unlikely(ftmb->cur == ftmb->num))
-		ftmb->cur = 0;
+	ftlog->cur++;
+       	if (unlikely(ftlog->cur == ftlog->num))
+		ftlog->cur = 0;
 	return ret;
 }
 
 static inline void
-nm_ftmb_input_logger(struct netmap_kring *kring, struct netmap_slot *slot,
+nm_ft_logger(struct netmap_kring *kring, struct netmap_slot *slot,
 		char *buf, int copy)
 {
 	struct netmap_adapter *na = kring->na;
-	struct nm_ftmb *ftmb = kring->ftmb;
-	const u_int pos = ftmb_next(kring);
-	struct netmap_slot *extra = &ftmb->slot[pos];
+	struct nm_ft_log *ftlog = kring->ftlog;
+	const u_int pos = ft_log_next(kring);
+	struct netmap_slot *extra = &ftlog->slot[pos];
 	u_int i, len = slot->len, off = slot->offset;
 	
 	//__builtin_prefetch(extra);
@@ -1539,13 +1536,12 @@ nm_ftmb_input_logger(struct netmap_kring *kring, struct netmap_slot *slot,
 		slot->buf_idx = buf_idx;
 		slot->len = 0;
 		slot->flags |= NS_BUF_CHANGED;
-		//ftmb->plog[pos] = (uint64_t)slot->buf_idx << 32 | off << 16 | len;
+		//ftlog->plog[pos] = (uint64_t)slot->buf_idx << 32 | off << 16 | len;
 	}
 	for (i = 0; i < len; i += 64) {
 		clflush(buf + i);
 	}
 }
-#endif /* FTMB */
 
 /*
  * main dispatch routine for the bridge.
@@ -1592,6 +1588,11 @@ nm_bdg_preflush(struct netmap_kring *kring, u_int end)
 
 		/* this slot goes into a list so initialize the link field */
 		ft[ft_i].ft_next = NM_FT_NULL;
+		if (bridge_ft_slot) {
+			buf = ft[ft_i].ft_buf = (void *)slot;
+			ft[ft_i].ft_flags |= FT_SLOT;
+			__builtin_prefetch(NMB(&na->up, slot));
+		} else {
 		buf = ft[ft_i].ft_buf = (slot->flags & NS_INDIRECT) ?
 			(void *)(uintptr_t)slot->ptr : NMB(&na->up, slot);
 		if (unlikely(buf == NULL)) {
@@ -1603,13 +1604,8 @@ nm_bdg_preflush(struct netmap_kring *kring, u_int end)
 			ft[ft_i].ft_flags = 0;
 		}
 		__builtin_prefetch(buf);
-		++ft_i;
-#ifdef FTMB
-		if (bridge_ftmb && likely(kring->ftmb)) {
-			nm_ftmb_input_logger(kring, slot, buf,
-					     bridge_ftmb == NM_FTMB_COPY);
 		}
-#endif /* FTMB */
+		++ft_i;
 		if (slot->flags & NS_MOREFRAG) {
 			frags++;
 			continue;
@@ -1635,9 +1631,8 @@ nm_bdg_preflush(struct netmap_kring *kring, u_int end)
 	return j;
 }
 
-#ifdef FTMB
 static void
-nm_ftmb_extra_free(struct netmap_adapter *na)
+nm_ftlog_extra_free(struct netmap_adapter *na)
 {
 	enum txrx t;
 
@@ -1646,20 +1641,20 @@ nm_ftmb_extra_free(struct netmap_adapter *na)
 
 		for (i = 0; i < netmap_real_rings(na, t); i++) {
 			struct netmap_kring *kring = &NMR(na, t)[i];
-			struct nm_ftmb *ftmb = kring->ftmb;
+			struct nm_ft_log *ftlog = kring->ftlog;
 
-			if (!ftmb)
+			if (!ftlog)
 				continue;
-			if (ftmb->slot) {
-				nm_os_free(ftmb->slot);
-				ftmb->slot = NULL;
+			if (ftlog->slot) {
+				nm_os_vfree(ftlog->slot);
+				ftlog->slot = NULL;
 			}
-			if (ftmb->plog) {
-				nm_os_free(ftmb->plog);
-				ftmb->plog = NULL;
+			if (ftlog->plog) {
+				nm_os_vfree(ftlog->plog);
+				ftlog->plog = NULL;
 			}
-			nm_os_free(ftmb);
-			kring->ftmb = NULL;
+			nm_os_free(ftlog);
+			kring->ftlog = NULL;
 		}
 	}
 }
@@ -1672,58 +1667,66 @@ nm_ftmb_extra_free(struct netmap_adapter *na)
  * We pack 1 metadata and 63 entries in a single 2048 byte buffer.
  */
 static int
-nm_ftmb_extra_alloc(struct netmap_adapter *na)
+nm_ftlog_extra_alloc(struct netmap_adapter *na)
 {
 	enum txrx t;
 	int nr = netmap_real_rings(na, NR_TX) + netmap_real_rings(na, NR_RX);
-	int num = bridge_ftmb_extra / nr;
+	int num = 0;
+
+	/* guess how many bufs are left */
+	for_rx_tx(t) {
+		int i;
+		
+		for (i = 0; i < netmap_real_rings(na, t); i++) {
+			num += NMR(na, t)[i].nkr_num_slots;
+		}
+	}
+	num = (na->na_lut.objtotal - num - 1024) / nr;
 
 	for_rx_tx(t) {
 		int i;
 
 		for (i =0; i < netmap_real_rings(na, t); i++) {
 			struct netmap_kring *kring = &NMR(na, t)[i];
-			struct nm_ftmb *ftmb;
+			struct nm_ft_log *ftlog;
 			struct netmap_slot *slot;
 			uint64_t *plog;
 			uint32_t next;
 			u_int n;
 
-			ftmb = nm_os_malloc(sizeof(*ftmb));
-			if (!ftmb)
+			ftlog = nm_os_malloc(sizeof(*ftlog));
+			if (!ftlog)
 				break;
-			kring->ftmb = ftmb;
-			slot = nm_os_malloc(sizeof(*slot) * num);
+			kring->ftlog = ftlog;
+			slot = nm_os_vmalloc(sizeof(*slot) * num);
 			if (!slot)
 				break;
-			ftmb->slot = slot;
-			plog = nm_os_malloc(sizeof(*plog) * num);
+			ftlog->slot = slot;
+			plog = nm_os_vmalloc(sizeof(*plog) * num);
 			if (!plog)
 				break;
-			ftmb->plog = plog;
+			ftlog->plog = plog;
 			n = netmap_extra_alloc(na, &next, num, 0);
 			if (n < num) {
 				D("allocated only %u bufs", n);
 			}
-			ftmb->num = n;
-			ftmb->cur = 0;
+			ftlog->num = n;
+			ftlog->cur = 0;
 
-			D("next %u", next);
 			for (; next; slot++) {
 				slot->buf_idx = next;
 				next = *(uint32_t *)NMB(na, slot);
 			}
-			D("initialized %u bufs", ftmb->num);
+			D("initialized %u bufs", ftlog->num);
 		}
 		/* rollback on error */
 		if (i < netmap_real_rings(na, t)) {
-			nm_ftmb_extra_free(na);
+			nm_ftlog_extra_free(na);
 			return ENOMEM;
 		}
 	}
 	return 0;
 }
-#endif /* FTMB */
 
 
 /* nm_register callback for VALE ports */
@@ -1751,14 +1754,12 @@ netmap_vp_reg(struct netmap_adapter *na, int onoff)
 		}
 		if (na->active_fds == 0) {
 			na->na_flags |= NAF_NETMAP_ON;
-#ifdef FTMB
 			if (strncmp(vpna->na_bdg->bdg_basename, NM_BDG_NAME,
-			    vpna->na_bdg->bdg_namelen) == 0) {
-				if (nm_ftmb_extra_alloc(na)) {
+			    strlen(NM_BDG_NAME)) == 0) {
+				if (nm_ftlog_extra_alloc(na)) {
 					return ENOMEM;
 			    	}
 			}
-#endif /* FTMB */
 		}
 		 /* XXX on FreeBSD, persistent VALE ports should also
 		 * toggle IFCAP_NETMAP in na->ifp (2014-03-16)
@@ -1798,6 +1799,11 @@ netmap_bdg_learning(struct nm_bdg_fwd *ft, uint8_t *dst_ring,
 	u_int dst, mysrc = na->bdg_port;
 	uint64_t smac, dmac;
 	uint8_t indbuf[12];
+
+	if (ft->ft_flags & FT_SLOT) {
+		buf = NMB(&na->up, (struct netmap_slot *)buf);
+		ft->ft_flags |= FT_LOG;
+	}
 
 	/* safety check, unfortunately we have many cases */
 	if (buf_len >= 14 + na->up.virt_hdr_len) {
@@ -1964,7 +1970,21 @@ nm_bdg_flush(struct nm_bdg_fwd *ft, u_int n, struct netmap_vp_adapter *na,
 		else if (unlikely(dst_port == me ||
 		    !b->bdg_ports[dst_port]))
 			continue;
+		if (ft[i].ft_flags & FT_SLOT) {
+			struct netmap_slot *slot = (void *)ft[i].ft_buf;
 
+			ft[i].ft_buf = NMB(&na->up, slot);
+			ft[i].ft_flags &= ~FT_SLOT;
+
+			if (ft[i].ft_flags & FT_LOG) {
+				struct netmap_kring *kring;
+
+				ft[i].ft_flags &= ~FT_LOG;
+				kring = &NMR(&na->up, NR_TX)[ring_nr];
+				nm_ft_logger(kring, slot, NMB(&na->up, slot),
+						bridge_ft_slot == NM_FT_COPY);
+			}
+		}
 		/* get a position in the scratch pad */
 		d_i = dst_port * NM_BDG_MAXRINGS + dst_ring;
 		d = dst_ents + d_i;
