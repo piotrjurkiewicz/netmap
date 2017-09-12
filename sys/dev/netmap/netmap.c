@@ -1175,7 +1175,7 @@ nm_may_forward_down(struct netmap_kring *kring, int sync_flags)
  * is not supposed to touch the ring (using a different thread)
  * during the execution of the system call.
  */
-static u_int
+u_int
 netmap_sw_to_nic(struct netmap_adapter *na)
 {
 	struct netmap_kring *kring = &na->rx_rings[na->num_rx_rings];
@@ -1219,12 +1219,6 @@ netmap_sw_to_nic(struct netmap_adapter *na)
 		/* if (sent) XXX txsync ? it would be just an optimization */
 	}
 	return sent;
-}
-
-static inline int
-_nm_num_host_rings(struct netmap_adapter *na, int t)
-{
-	return netmap_real_rings(na, t) - nma_get_nrings(na, t);
 }
 
 /*
@@ -3151,7 +3145,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	uint8_t *buf;
 	u_int i;
 
-	i = curcpu % _nm_num_host_rings(na, NR_RX);
+	i = curcpu % nm_num_host_rings(na, NR_RX);
 	kring = &NMR(na, NR_RX)[nma_get_nrings(na, NR_RX) + i];
 
 	// XXX [Linux] we do not need this lock
@@ -3219,9 +3213,7 @@ done:
 	if (m)
 		m_freem(m);
 	/* unconditionally wake up listeners */
-	if (!(kring->nr_kflags & NKR_NOXMIT)) {
-		kring->nm_notify(kring, 0);
-	}
+	kring->nm_notify(kring, 0);
 	/* this is normally netmap_notify(), but for nics
 	 * connected to a bridge it is netmap_bwrap_intr_notify(),
 	 * that possibly forwards the frames through the switch

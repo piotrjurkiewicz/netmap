@@ -73,6 +73,7 @@ SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_verbose, CTLFLAG_RW, &stackmap_verbos
 SYSCTL_INT(_dev_netmap, OID_AUTO, stackmap_extra, CTLFLAG_RW, &stackmap_extra, 0 , "");
 SYSEND;
 
+#define NOMBQ
 static inline struct netmap_adapter *
 stackmap_na(const struct netmap_adapter *slave)
 {
@@ -469,6 +470,9 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	}
 	ft->nfds -= n;
 	ft->npkts -= sent;
+	if (host && sent > 1) {
+		RD(1, "sent %u packets", sent);
+	}
 	memmove(ft->fds, ft->fds + n, sizeof(ft->fds[0]) * ft->nfds);
 
 	rxkring->nr_hwtail = j;
@@ -633,7 +637,12 @@ stackmap_rxsync(struct netmap_kring *kring, int flags)
 				if (stackmap_host_batch) {
 					/* flush packets sent by the host */
 					hk->nr_kflags &= ~NKR_NOXMIT;
+#ifdef NOMBQ
+					/* packets are already on host ring */
+					netmap_bwrap_intr_notify(hk, 1);
+#else
 					netmap_bwrap_intr_notify(hk, 0);
+#endif
 				}
 			}
 		}
@@ -661,7 +670,6 @@ stackmap_txsync(struct netmap_kring *kring, int flags)
 	kring->nr_hwtail = nm_prev(done, kring->nkr_num_slots - 1);
 	return 0;
 }
-
 int
 stackmap_transmit(struct ifnet *ifp, struct mbuf *m)
 {
@@ -696,7 +704,45 @@ csum_transmit:
 					- MBUF_TRANSPORT_HEADER(m), check);
 			m->ip_summed = 0;
 		}
+#ifdef NOMBQ
+		{
+		struct netmap_kring *kring;
+		struct netmap_slot *hslot;
+		u_int nm_i, lim, len = MBUF_LEN(m);
+		u_int head;
+
+		/* host ring */
+		nm_i = curcpu & nm_num_host_rings(na, NR_RX);
+		kring = &NMR(na, NR_RX)[nma_get_nrings(na, NR_RX) + nm_i];
+		head = kring->rhead;
+		lim = kring->nkr_num_slots - 1;
+		nm_i = kring->nr_hwtail;
+		/* check space */
+		if (unlikely(nm_i == nm_prev(kring->nr_hwcur, lim))) {
+			RD(1, "kring full");
+			m_freem(m);
+			return EBUSY;
+		} else if (unlikely(!nm_netmap_on(na))) {
+			m_freem(m);
+			return ENXIO;
+		}
+		hslot = &kring->ring->slot[nm_i];
+		m_copydata(m, 0, len, NMB(na, hslot) + na->virt_hdr_len);
+		hslot->len = len;
+		kring->nr_hwtail = nm_next(nm_i, lim);
+
+		nm_i = kring->nr_hwcur;
+		if (nm_i != head) {
+			kring->nr_hwcur = head;
+		}
+		if (!stackmap_host_batch) {
+			netmap_bwrap_intr_notify(kring, 1);
+		}
+		/* as if netmap_transmit + rxsync_from_host done */
+		}
+#else
 		netmap_transmit(ifp, m);
+#endif
 		return 0;
 	}
 

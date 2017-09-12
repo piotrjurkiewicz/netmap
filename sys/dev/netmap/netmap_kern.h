@@ -984,6 +984,13 @@ netmap_real_rings(struct netmap_adapter *na, enum txrx t)
 	return nma_get_nrings(na, t) + host;
 }
 
+static __inline int
+nm_num_host_rings(struct netmap_adapter *na, int t)
+{
+	return netmap_real_rings(na, t) - nma_get_nrings(na, t);
+}
+
+
 #ifdef WITH_VALE
 struct nm_bdg_polling_state;
 /*
@@ -1305,6 +1312,7 @@ int netmap_attach(struct netmap_adapter *);
 int netmap_attach_ext(struct netmap_adapter *, size_t size, int override_reg);
 void netmap_detach(struct ifnet *);
 int netmap_transmit(struct ifnet *, struct mbuf *);
+u_int netmap_sw_to_nic(struct netmap_adapter *na);
 int stackmap_transmit(struct ifnet *, struct mbuf *);
 struct netmap_slot *netmap_reset(struct netmap_adapter *na,
 	enum txrx tx, u_int n, u_int new_cur);

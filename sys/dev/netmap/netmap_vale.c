@@ -2568,6 +2568,8 @@ netmap_bwrap_intr_notify(struct netmap_kring *kring, int flags)
 	int ret = NM_IRQ_COMPLETED;
 	int error;
 
+	if (kring->nr_kflags & NKR_NOXMIT)
+		return 0;
 	if (netmap_verbose)
 	    D("%s %s 0x%x", na->name, kring->name, flags);
 
@@ -2585,7 +2587,10 @@ netmap_bwrap_intr_notify(struct netmap_kring *kring, int flags)
 	/* simulate a user wakeup on the rx ring
 	 * fetch packets that have arrived.
 	 */
-	error = kring->nm_sync(kring, 0);
+	if (flags) {
+		error = 0;
+	} else
+		error = kring->nm_sync(kring, 0);
 	if (error)
 		goto put_out;
 	if (kring->nr_hwcur == kring->nr_hwtail) {
