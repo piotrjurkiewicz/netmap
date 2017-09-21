@@ -712,7 +712,7 @@ csum_transmit:
 		u_int head;
 
 		/* host ring */
-		nm_i = curcpu & nm_num_host_rings(na, NR_RX);
+		nm_i = curcpu % nm_num_host_rings(na, NR_RX);
 		kring = &NMR(na, NR_RX)[nma_get_nrings(na, NR_RX) + nm_i];
 		head = kring->rhead;
 		lim = kring->nkr_num_slots - 1;
