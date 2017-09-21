@@ -483,7 +483,7 @@ static int netmap_no_timestamp; /* don't timestamp on rxsync */
 int netmap_mitigate = 1;
 int netmap_no_pendintr = 1;
 int netmap_txsync_retry = 2;
-int netmap_host_mq = 0;
+int netmap_host_mq = 1;
 int netmap_flags = 0;	/* debug flags */
 static int netmap_fwd = 0;	/* force transparent forwarding */
 
