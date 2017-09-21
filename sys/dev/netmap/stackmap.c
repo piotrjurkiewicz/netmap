@@ -470,9 +470,6 @@ stackmap_bdg_flush(struct netmap_kring *kring)
 	}
 	ft->nfds -= n;
 	ft->npkts -= sent;
-	if (host && sent > 1) {
-		RD(1, "sent %u packets", sent);
-	}
 	memmove(ft->fds, ft->fds + n, sizeof(ft->fds[0]) * ft->nfds);
 
 	rxkring->nr_hwtail = j;
