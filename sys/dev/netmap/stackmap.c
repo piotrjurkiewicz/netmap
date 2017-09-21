@@ -820,6 +820,7 @@ stackmap_extra_free(struct netmap_adapter *na)
 			if (!kring->extra)
 				continue;
 			extra = kring->extra;
+			kring->extra = NULL;
 			if (extra->num) {
 				int j;
 
