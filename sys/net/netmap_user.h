@@ -643,12 +643,6 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 	char suffix[NETMAP_SUFFIX_LEN];
 
 	bzero(suffix, sizeof(suffix));
-	if (strncmp(ifname, "netmap:", 7) &&
-			strncmp(ifname, NM_BDG_NAME, strlen(NM_BDG_NAME))
-			&& strncmp(ifname, "stack", 5)) {
-		errno = 0; /* name not recognised, not an error */
-		goto fail;
-	}
 
 	is_vale = (ifname[0] == 'v') || (ifname[0] == 's');
 	if (is_vale) {
@@ -810,6 +804,9 @@ nm_parse(const char *ifname, struct nm_desc *d, char *err)
 			break;
 		}
 	}
+	if (nr_flags & NR_SUFFIX) {
+		strncpy(d->req.nr_suffix, suffix, sizeof(d->req.nr_suffix));
+	}
 	if (p_state != P_START && p_state != P_RNGSFXOK && p_state != P_FLAGSOK) {
 		snprintf(errmsg, MAXERRMSG, "unexpected end of port name");
 		goto fail;
@@ -858,7 +855,8 @@ nm_open(const char *ifname, const struct nmreq *req,
 	struct netmap_pools_info *pi = NULL;
 
 	if (strncmp(ifname, "netmap:", 7) &&
-			strncmp(ifname, NM_BDG_NAME, strlen(NM_BDG_NAME))) {
+			strncmp(ifname, NM_BDG_NAME, strlen(NM_BDG_NAME)) &&
+			strncmp(ifname, "stack", 5)) {
 		errno = 0; /* name not recognised, not an error */
 		return NULL;
 	}
@@ -932,13 +930,16 @@ nm_open(const char *ifname, const struct nmreq *req,
 			d->req.nr_ringid = parent->req.nr_ringid;
 			d->req.nr_flags = parent->req.nr_flags;
 		}
+		/* import suffix */
+		if (strlen(parent->req.nr_suffix) > 0) {
+			strncpy(d->req.nr_suffix, parent->req.nr_suffix,
+				sizeof(d->req.nr_suffix));
+			D("imported nr_suffix %s", d->req.nr_suffix);
+		}
 	}
 	/* add the *XPOLL flags */
 	d->req.nr_ringid |= new_flags & (NETMAP_NO_TX_POLL | NETMAP_DO_RX_POLL);
 
-	if (nr_flags & NR_SUFFIX) {
-		strncpy(d->req.nr_suffix, suffix, sizeof(d->req.nr_suffix));
-	}
 	if (ioctl(d->fd, NIOCREGIF, &d->req)) {
 		snprintf(errmsg, MAXERRMSG, "NIOCREGIF failed: %s", strerror(errno));
 		goto fail;
