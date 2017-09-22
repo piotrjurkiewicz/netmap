@@ -903,6 +903,10 @@ ignore:
 		}
 		/* append this buffer to the scratchpad */
 		slot = scb_slot(scb);
+		if (unlikely(slot == NULL)) {
+			RD(1, "no slot");
+			continue;
+		}
 		slot->fd = stackmap_sk(m->sk)->fd;
 		slot->len = skb_headroom(m) + skb_headlen(m);
 		slot->offset = skb_headroom(m) - kring->na->virt_hdr_len; // XXX
