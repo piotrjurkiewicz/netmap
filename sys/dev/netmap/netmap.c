@@ -2296,8 +2296,10 @@ netmap_ioctl(struct netmap_priv_d *priv, u_long cmd, caddr_t data, struct thread
 		} else if (nmr->nr_cmd2 == NETMAP_POOLS_CREATE) {
 			D("POOLS_CREATE (nr_arg4 %u)", nmr->nr_arg4);
 			nmd = netmap_mem_ext_create(nmr, &error);
-			if (nmd == NULL)
+			if (nmd == NULL) {
+				D("ext_create failed");
 				break;
+			}
 			/* reset the fields used by POOLS_CREATE to
 			 * avoid confusing the rest of the code
 			 */
