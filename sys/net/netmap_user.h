@@ -930,11 +930,9 @@ nm_open(const char *ifname, const struct nmreq *req,
 			d->req.nr_ringid = parent->req.nr_ringid;
 			d->req.nr_flags = parent->req.nr_flags;
 		}
-		/* import suffix */
-		if (strlen(parent->req.nr_suffix) > 0) {
-			strncpy(d->req.nr_suffix, parent->req.nr_suffix,
-				sizeof(d->req.nr_suffix));
-			D("imported nr_suffix %s", d->req.nr_suffix);
+		/* import another extra buffer request */
+		if (parent->req.nr_arg4) {
+			d->req.nr_arg4 = parent->req.nr_arg4;
 		}
 	}
 	/* add the *XPOLL flags */
