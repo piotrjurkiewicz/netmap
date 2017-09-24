@@ -616,13 +616,15 @@ static void
 nm_init_offsets(struct nm_desc *d)
 {
 	struct netmap_if *nifp = NETMAP_IF(d->mem, d->req.nr_offset);
-	struct netmap_ring *r = NETMAP_RXRING(nifp, 0);
+	struct netmap_ring *r = NETMAP_RXRING(nifp, d->first_rx_ring);
 
 	*(struct netmap_if **)(uintptr_t)&(d->nifp) = nifp;
 	*(struct netmap_ring **)(uintptr_t)&d->some_ring = r;
 	*(void **)(uintptr_t)&d->buf_start = NETMAP_BUF(r, 0);
 	*(void **)(uintptr_t)&d->buf_end =
 		(char *)d->mem + d->memsize;
+	D("nifp %p some_ring %p buf_start %p buf_end %p",
+			d->nifp, d->some_ring, d->buf_start, d->buf_end);
 }
 
 #define MAXERRMSG 80
@@ -943,19 +945,6 @@ nm_open(const char *ifname, const struct nmreq *req,
 		goto fail;
 	}
 
-	if (pi != NULL) {
-		d->mem = pi;
-		d->memsize = pi->memsize;
-		nm_init_offsets(d);
-	} else if ((!(new_flags & NM_OPEN_NO_MMAP) || parent)) {
-		/* if parent is defined, do nm_mmap() even if NM_OPEN_NO_MMAP is set */
-	        errno = nm_mmap(d, parent);
-		if (errno) {
-			snprintf(errmsg, MAXERRMSG, "mmap failed: %s", strerror(errno));
-			goto fail;
-		}
-	}
-
 	nr_reg = d->req.nr_flags & NR_REG_MASK;
 
 	if (nr_reg == NR_REG_SW) { /* host stack */
@@ -979,6 +968,20 @@ nm_open(const char *ifname, const struct nmreq *req,
 		d->first_tx_ring = d->last_tx_ring = 0;
 		d->first_rx_ring = d->last_rx_ring = 0;
 	}
+
+	if (pi != NULL) {
+		d->mem = pi;
+		d->memsize = pi->memsize;
+		nm_init_offsets(d);
+	} else if ((!(new_flags & NM_OPEN_NO_MMAP) || parent)) {
+		/* if parent is defined, do nm_mmap() even if NM_OPEN_NO_MMAP is set */
+	        errno = nm_mmap(d, parent);
+		if (errno) {
+			snprintf(errmsg, MAXERRMSG, "mmap failed: %s", strerror(errno));
+			goto fail;
+		}
+	}
+
 
 #ifdef DEBUG_NETMAP_USER
     { /* debugging code */
