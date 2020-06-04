@@ -554,7 +554,7 @@ struct netmap_mem_d nm_mem = {	/* Our memory allocator. */
 			.objminsize = 64,
 			.objmaxsize = 65536,
 			.nummin     = 4,
-			.nummax	    = 1000000, /* one million! */
+			.nummax	    = 4194304,
 		},
 	},
 
