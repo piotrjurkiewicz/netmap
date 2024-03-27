@@ -2280,7 +2280,7 @@ netmap_sink_init(void)
 		na.nm_txsync = nm_sink_txsync;
 		na.nm_rxsync = nm_sink_rxsync;
 		na.num_tx_rings = na.num_rx_rings = 1;
-		na.na_flags = NAF_OFFSETS;
+		na.na_flags = NAF_OFFSETS | NAF_MOREFRAG;
 		if (netmap_attach_ext(&na, sizeof(struct netmap_sink_adapter), 1)) {
 			dev_err(&netdev->dev, "failed to attach netmap adapter");
 			unregister_netdev(netdev);
