@@ -264,6 +264,9 @@ nm_os_extmem_create(unsigned long p, struct nmreq_pools_info *pi, int *perror)
 #ifndef FOLL_POPULATE
 #define FOLL_POPULATE 0
 #endif /* FOLL_POPULATE */
+#ifndef FOLL_LONGTERM
+#define FOLL_LONGTERM 0
+#endif /* FOLL_POPULATE */
 	unsigned long end, start;
 	int nr_pages, res;
 	struct nm_os_extmem *e = NULL;
@@ -295,7 +298,7 @@ nm_os_extmem_create(unsigned long p, struct nmreq_pools_info *pi, int *perror)
 			p,
 			nr_pages,
 			pages,
-			FOLL_WRITE | FOLL_SPLIT | FOLL_POPULATE);
+			FOLL_WRITE | FOLL_SPLIT | FOLL_POPULATE | FOLL_LONGTERM);
 #elif defined(NETMAP_LINUX_HAVE_GUP_4ARGS)
 	res = get_user_pages_unlocked(
 			p,
