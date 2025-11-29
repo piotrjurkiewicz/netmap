@@ -339,7 +339,7 @@ nm_os_extmem_create(unsigned long p, struct nmreq_pools_info *pi, int *perror)
 
 	if (res < nr_pages) {
 		nm_prerr("failed to get user pages: res %d nr_pages %d", res, nr_pages);
-		err = EFAULT;
+		err = (res < 0) ? -res : EFAULT;
 		goto out;
 	}
 
