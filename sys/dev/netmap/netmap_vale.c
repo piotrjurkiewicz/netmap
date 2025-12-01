@@ -982,16 +982,18 @@ retry:
 
 					slot = &ring->slot[j];
 					dst = NMB(&dst_na->up, slot);
-					dstoff = nm_get_offset(kring, slot);
-					dstoff_cb = dstoff & ~mask;
 					src_cb = ((uintptr_t)src) & ~mask;
 					src_co = ((uintptr_t)src) & mask;
 					dst_co = ((uintptr_t)(dst + dstoff)) & mask;
-					if (dst_co < src_co) {
-						dstoff_cb += NM_BUF_ALIGN;
+					if (kring->offset_mask) {
+						dstoff = nm_get_offset(kring, slot);
+						dstoff_cb = dstoff & ~mask;
+						if (src_co < dst_co) {
+							dstoff_cb += NM_BUF_ALIGN;
+						}
+						dstoff = dstoff_cb + src_co;
+						copy_len += src_co;
 					}
-					dstoff = dstoff_cb + src_co;
-					copy_len += src_co;
 
 					nm_prdis("send [%d] %d(%d) bytes at %s:%d",
 							i, (int)copy_len, (int)dst_len,
@@ -1010,13 +1012,15 @@ retry:
 							// invalid user pointer, pretend len is 0
 							dst_len = 0;
 						}
-					} else {
+					} else if (!src_co || kring->offset_mask) {
 						//memcpy(dst, src, copy_len);
 						pkt_copy((char *)src_cb, dst + dstoff_cb, (int)copy_len);
+						nm_write_offset(kring, slot, dstoff);
+					} else {
+						memcpy(dst, src, copy_len);
 					}
 					slot->len = dst_len;
 					slot->flags = (cnt << 8)| NS_MOREFRAG;
-					nm_write_offset(kring, slot, dstoff);
 					j = nm_next(j, lim);
 					needed--;
 					ft_p++;
