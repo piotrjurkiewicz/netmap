@@ -976,7 +976,7 @@ retry:
 					char *dst, *src = ft_p->ft_buf;
 					size_t copy_len = ft_p->ft_len, dst_len = copy_len;
 					uintptr_t src_cb;
-					uint64_t dstoff, dstoff_cb;
+					uint64_t dstoff = 0, dstoff_cb = 0;
 					int src_co, dst_co;
 					const uintptr_t mask = NM_BUF_ALIGN - 1;
 
@@ -984,16 +984,14 @@ retry:
 					dst = NMB(&dst_na->up, slot);
 					src_cb = ((uintptr_t)src) & ~mask;
 					src_co = ((uintptr_t)src) & mask;
+					dstoff = nm_get_offset(kring, slot);
+					dstoff_cb = dstoff & ~mask;
 					dst_co = ((uintptr_t)(dst + dstoff)) & mask;
-					if (kring->offset_mask) {
-						dstoff = nm_get_offset(kring, slot);
-						dstoff_cb = dstoff & ~mask;
-						if (src_co < dst_co) {
-							dstoff_cb += NM_BUF_ALIGN;
-						}
-						dstoff = dstoff_cb + src_co;
-						copy_len += src_co;
+					if (src_co < dst_co) {
+						dstoff_cb += NM_BUF_ALIGN;
 					}
+					dstoff = dstoff_cb + src_co;
+					copy_len += src_co;
 
 					nm_prdis("send [%d] %d(%d) bytes at %s:%d",
 							i, (int)copy_len, (int)dst_len,
