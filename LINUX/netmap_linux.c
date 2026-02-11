@@ -312,6 +312,14 @@ nm_os_extmem_create(unsigned long p, struct nmreq_pools_info *pi, int *perror)
 			1, /* write */
 			0, /* don't force */
 			pages);
+#elif defined(NETMAP_LINUX_HAVE_GUP_6ARGS)
+	res = get_user_pages_unlocked(
+			current,
+			current->mm,
+			p,
+			nr_pages,
+			pages,
+			FOLL_WRITE | FOLL_GET | FOLL_SPLIT | FOLL_POPULATE); // XXX check other flags
 #elif defined(NETMAP_LINUX_HAVE_GUP_7ARGS)
 	res = get_user_pages_unlocked(
 			current,
