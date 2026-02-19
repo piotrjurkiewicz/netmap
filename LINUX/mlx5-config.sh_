@@ -1,0 +1,10 @@
+#!/bin/sh
+
+if [ -e mlx5/configure.mk.kernel ]; then
+	exit 0
+fi
+
+LINVER=$(@SRCDIR@/scripts/vers @LIN_VER@ -C)
+
+cd mlx5
+./configure --mlnx_en --kernel-version=$LINVER --kernel-sources=@KSRC@ -j$(nproc)

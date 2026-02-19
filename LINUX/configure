@@ -879,7 +879,9 @@ done
 
 replace_vars "$SRCDIR"/default-config.mak.in_ > default-config.mak
 replace_vars "$SRCDIR"/intel-fix.sh_ > intel-fix.sh
+replace_vars "$SRCDIR"/mlx5-config.sh_ > mlx5-config.sh
 chmod +x intel-fix.sh
+chmod +x mlx5-config.sh
 
 ###############################################################
 # Makefile creation

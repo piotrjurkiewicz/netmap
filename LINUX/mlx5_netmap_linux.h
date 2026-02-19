@@ -96,6 +96,15 @@ u32 mlx5e_decompress_cqes_start(struct mlx5e_rq *rq,
                           struct mlx5e_cq *cq,
                           int budget_rem);
 
+int mlx5e_netmap_reg(struct netmap_adapter *na, int onoff);
+int mlx5e_netmap_txsync(struct netmap_kring *kring, int flags);
+int mlx5e_netmap_rxsync(struct netmap_kring *kring, int flags);
+int mlx5e_netmap_tx_flush(struct mlx5e_txqsq *sq);
+int mlx5e_netmap_rx_flush(struct mlx5e_rq *rq);
+int mlx5e_netmap_configure_tx_ring(struct NM_MLX5E_ADAPTER *adapter, int ring_nr);
+int mlx5e_netmap_configure_rx_ring(struct mlx5e_rq *rq, int ring_nr);
+int mlx5e_netmap_config(struct netmap_adapter *na, struct nm_config_info *info);
+void mlx5e_netmap_attach(struct NM_MLX5E_ADAPTER *adapter);
 
 /*
  * Register/unregister. We are already under netmap lock.
