@@ -20,7 +20,8 @@ sub checkversion
 	   ($may == 2 && $min != 6 && !($sub >= 32 && !$sub <= 39)) ||
 	   ($may == 3 && $min > 19) ||
 	   ($may == 4 && $min > 20) ||
-	   ($may == 5 && $min > 19)) {
+	   ($may == 5 && $min > 19) ||
+           ($may == 6 && $min > 19)) {
 		die "Bad version $v";
 	}
 }
@@ -67,11 +68,11 @@ sub next
 		} else {
 			return "5.0";
 		}
-	} elsif ($may == 5) {
+	} elsif ($may == 5 || $may == 6) {
 		if ($min < 19) {
-			return "5." . ($min +1);
+			return "" . $may . "." . ($min +1);
 		} else {
-			return "6.0";
+			return "" . ($may + 1) . ".0";
 		}
 	} else {
 		return "$may." . ($min + 1);
@@ -90,8 +91,8 @@ sub prev
 			return "3.19";
 		} elsif ($may == 5) {
 			return "4.20";
-		} elsif ($may == 6) {
-			return "5.19";
+		} elsif ($may == 6 || $may == 7) {
+			return "" . ($may - 1) . ".19";
 		} else {
 			die "Unknown version: $v";
 		}
