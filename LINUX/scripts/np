@@ -629,7 +629,7 @@ function build-check()
 	done
 }
 
-MINVERS=2.6.32
+MINVERS=4.0
 MAXVERS=
 NEXTVERS=
 ##
