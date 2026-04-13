@@ -181,6 +181,34 @@ function get-patch()
 }
 
 ##
+##  put-patch <driver> <version>
+function put-patch()
+{
+	declare driver version
+	get-params "driver version" "$@"
+
+	local drvpath drvdir v patchname
+	# convert kernel version to fixed notation
+	drvpath=$(driver-path "$driver" "$version")
+	[ -n "$drvpath" ] || return
+	drvdir=$(dirname "$drvpath")
+	v=$(scripts/vers "$version" -c)
+	patchname=$(ls final-patches/vanilla--"$driver"--* | awk -v v="$v" -F -- '($3 != "*") && ($3 <= v"") && (v"" < $4)')
+	[ -n "$patchname" ] || return
+	(
+		set -e
+		cd "$GITDIR"
+		git checkout netmap-$version || git checkout -b netmap-$version v$version
+		cd "$drvdir"
+		patch -N --no-backup-if-mismatch -p1 || { git restore .; git clean -fdx .; exit; }
+		git add -u
+		git commit -m "patch for netmap $driver driver"
+		git clean -fdx .
+	) < "$patchname"
+	return 0;
+}
+
+##
 ##  get-range <driver> <version1> <version2>
 ##	extracts the netmap patches for the given <driver> for
 ##	all the kernel versions from <version1> (included) to
@@ -207,6 +235,21 @@ function get-range()
 			echo "$p"
 		fi
 		v=$nv
+	done
+}
+
+##
+##  put-range <version1> <version2>
+function put-range()
+{
+	declare version1 version2
+	get-params "version1 version2"	 "$@"
+
+	local v
+	v=$version1
+	while scripts/vers -b "$v" "$version2" -L; do
+		forall put-patch "$v"
+		v=$(scripts/vers "$v" -i)
 	done
 }
 
