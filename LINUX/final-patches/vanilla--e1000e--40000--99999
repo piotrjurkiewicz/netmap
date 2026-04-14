@@ -1,5 +1,5 @@
 diff --git a/e1000e/netdev.c b/e1000e/netdev.c
-index 247335d2c7ec..14045858fc88 100644
+index 1e8c40fd5c3d..7d560555ecff 100644
 --- a/e1000e/netdev.c
 +++ b/e1000e/netdev.c
 @@ -493,6 +493,10 @@ static int e1000_desc_unused(struct e1000_ring *ring)
@@ -57,7 +57,7 @@ index 247335d2c7ec..14045858fc88 100644
  
  	if (adapter->rx_ps_pages) {
  		u32 psrctl = 0;
-@@ -3736,6 +3756,10 @@ static void e1000_configure(struct e1000_adapter *adapter)
+@@ -3733,6 +3753,10 @@ static void e1000_configure(struct e1000_adapter *adapter)
  		e1000e_setup_rss_hash(adapter);
  	e1000_setup_rctl(adapter);
  	e1000_configure_rx(adapter);
@@ -68,7 +68,7 @@ index 247335d2c7ec..14045858fc88 100644
  	adapter->alloc_rx_buf(rx_ring, e1000_desc_unused(rx_ring), GFP_KERNEL);
  }
  
-@@ -7022,6 +7046,9 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+@@ -7020,6 +7044,9 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
  	if (err)
  		goto err_register;
  
@@ -78,7 +78,7 @@ index 247335d2c7ec..14045858fc88 100644
  	/* carrier off reporting is important to ethtool even BEFORE open */
  	netif_carrier_off(netdev);
  
-@@ -7117,6 +7144,10 @@ static void e1000_remove(struct pci_dev *pdev)
+@@ -7115,6 +7142,10 @@ static void e1000_remove(struct pci_dev *pdev)
  	kfree(adapter->tx_ring);
  	kfree(adapter->rx_ring);
  
