@@ -218,7 +218,7 @@ port_info_get(struct TestContext *ctx)
 	printf("nr_mem_id %u\n", req.nr_mem_id);
 
 	success = req.nr_memsize && req.nr_tx_slots && req.nr_rx_slots &&
-	          req.nr_tx_rings && req.nr_rx_rings && req.nr_tx_rings;
+	          req.nr_tx_rings && req.nr_rx_rings;
 	if (!success) {
 		return -1;
 	}
