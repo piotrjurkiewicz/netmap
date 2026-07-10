@@ -27,8 +27,6 @@
 
 
 /*
- * $FreeBSD: head/sys/dev/netmap/if_lem_netmap.h 271849 2014-09-19 03:51:26Z glebius $
- *
  * netmap support for: lem
  *
  * For details on netmap support please see ixgbe_netmap.h

@@ -26,11 +26,6 @@
  * SUCH DAMAGE.
  */
 
-/*
- * $FreeBSD$
- */
-
-
 #ifdef linux
 #include "bsd_glue.h"
 #elif defined (_WIN32)

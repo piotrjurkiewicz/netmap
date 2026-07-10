@@ -26,11 +26,6 @@
  * SUCH DAMAGE.
  */
 
-/*
- * $FreeBSD$
- */
-
-
 #ifndef _NET_NETMAP_MBQ_H__
 #define _NET_NETMAP_MBQ_H__
 

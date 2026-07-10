@@ -26,8 +26,6 @@
  */
 
 /*
- * $FreeBSD: head/sys/dev/netmap/ixgbe_netmap.h 244514 2012-12-20 22:26:03Z luigi $
- *
  * netmap support for: ixgbe (both ix and ixv)
  *
  * This file is meant to be a reference on how to implement

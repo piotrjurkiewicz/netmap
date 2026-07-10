@@ -26,8 +26,6 @@
  */
 
 /*
- * $FreeBSD$
- *
  * netmap support for: re
  *
  * For more details on netmap support please see ixgbe_netmap.h
